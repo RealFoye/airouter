@@ -5,6 +5,7 @@ import pytest
 from airouter.engine.router.router import Router
 from airouter.models.enums import (
     BudgetStatus,
+    RiskLevel,
     StrategyType,
 )
 
@@ -89,7 +90,7 @@ def test_router_alternatives_populated(router: Router):
 def test_router_budget_status(router: Router):
     """预算状态应该是有效的枚举值。"""
     decision = router.route("写一个ETL脚本处理CSV数据")
-    assert decision.budget_status in (BudgetStatus.OK, BudgetStatus.WARNING, BudgetStatus.OVER_BUDGET)
+    assert decision.budget_status in (BudgetStatus.OK, BudgetStatus.WARNING, BudgetStatus.OVER_BUDGET, BudgetStatus.OVER_HARD_BUDGET)
 
 
 def test_router_savings_nonnegative(router: Router):
@@ -97,3 +98,53 @@ def test_router_savings_nonnegative(router: Router):
     for desc in TEST_DESCRIPTIONS[:5]:
         decision = router.route(desc)
         assert decision.estimated_savings >= 0
+
+
+# ── 政策验证测试（不是通路测试） ─────────────────────────────
+# 这些测试证明企业管控规则正确实现。
+
+def test_policy_high_risk_tier2_must_review(router: Router):
+    """核心政策：高风险 + Tier 2 降级 → requires_human_review=true。
+
+    这是 Week 1 最大的 bug case：写JWT鉴权中间件推荐 Tier 2，
+    风险 HIGH，但 requires_human_review 曾为 false。
+    用确定性断言，不用 if（避免空测试）。
+    """
+    decision = router.route("写一个FastAPI JWT鉴权中间件")
+    executor = router.registry.get_by_name(decision.models.executor)
+    assert decision.risk_level == RiskLevel.HIGH
+    assert executor is not None
+    assert executor.tier == 2
+    assert decision.requires_human_review is True
+    assert "human_review" in decision.quality_gate
+    assert "降级" in decision.human_review_reason or "拆分" in decision.human_review_reason
+
+
+def test_policy_simple_low_risk_no_review(router: Router):
+    """SIMPLE + LOW risk → 不应触发审核（省钱路径不锁死）。"""
+    decision = router.route("写一个Python函数检查回文")
+    assert decision.risk_level == RiskLevel.LOW
+    assert decision.requires_human_review is False
+
+
+def test_policy_gate_review_consistency(router: Router):
+    """政策一致性：requires_human_review=true → human_review 在 quality_gate 中。"""
+    for desc in TEST_DESCRIPTIONS:
+        decision = router.route(desc)
+        if decision.requires_human_review:
+            assert "human_review" in decision.quality_gate, (
+                f"Inconsistency for '{desc}': requires_human_review=true "
+                f"but human_review not in quality_gate {decision.quality_gate}"
+            )
+
+
+def test_policy_high_risk_tier1_no_downgrade_trigger(router: Router):
+    """高风险 + Tier 1 执行 → 不应触发条件2（降级审核）。"""
+    decision = router.route("修复生产环境的内存泄漏")
+    executor = router.registry.get_by_name(decision.models.executor)
+    assert decision.risk_level == RiskLevel.HIGH
+    assert executor is not None
+    assert executor.tier == 1
+    # Tier 1 执行，不应因"降级"触发审核
+    if decision.human_review_reason:
+        assert "降级" not in decision.human_review_reason

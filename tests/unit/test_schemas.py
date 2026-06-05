@@ -63,7 +63,7 @@ def test_strategy_type_count():
 
 
 def test_budget_status_count():
-    assert len(BudgetStatus) == 3
+    assert len(BudgetStatus) == 4
 
 
 # ── CAPABILITY_REQUIREMENTS 完整性 ──────────────────────────
@@ -180,12 +180,14 @@ def test_routing_decision_serialization():
 def test_execution_feedback():
     feedback = ExecutionFeedback(
         routing_decision_id=1,
-        model_name="qwen3.7-plus",
+        executed_strategy="SINGLE_MODEL",
+        executed_models_json=["qwen3.7-plus"],
         actual_input_tokens=2500,
         actual_output_tokens=800,
         actual_cost_cny=0.08,
-        latency_ms=1500,
+        actual_latency_ms=1500,
         quality_score=0.85,
+        user_accepted=True,
     )
     assert feedback.actual_cost_cny == 0.08
 
@@ -193,19 +195,18 @@ def test_execution_feedback():
 # ── BenchmarkResult ─────────────────────────────────────────
 def test_benchmark_result():
     result = BenchmarkResult(
-        benchmark_level=2,
+        suite_name="level2_comparison",
         case_id="code_gen_001",
-        case_category=TaskCategory.CODE_GENERATION,
-        case_complexity=ComplexityLevel.MODERATE,
-        model_name="deepseek-v4-flash",
-        strategy=StrategyType.SINGLE_MODEL,
+        task_type=TaskCategory.CODE_GENERATION,
+        complexity=ComplexityLevel.MODERATE,
+        model_or_strategy="deepseek-v4-flash",
         input_tokens=2000,
         output_tokens=500,
         cost_cny=0.01,
-        latency_ms=800,
+        actual_latency_ms=800,
         quality_score=0.72,
     )
-    assert result.benchmark_level == 2
+    assert result.suite_name == "level2_comparison"
 
 
 # ── ConfigSnapshot ──────────────────────────────────────────

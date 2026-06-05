@@ -135,7 +135,7 @@ make test-unit
 |---|------|-----|----------|------|
 | 2.3 | Classifier：从 TaskFeatures 确定策略触发条件（Plan-Execute 7 条、Guided 5 条） | 必做 | `src/airouter/engine/router/classifier.py` | `test_classifier.py` |
 | 2.6 | **策略候选生成**：SINGLE / GUIDED / PLAN_EXECUTE / PLAN_EXECUTE_REVIEW（先只做成本预估，不真实执行多模型调用链） | 必做 | `selector.py` 扩展 | `test_strategies.py` |
-| 2.8 | **管控门禁**：预算检查 + 人工审核触发（3 条件）+ 质量门禁 + Fallback | 必做 | 同上 | 验证门禁触发逻辑 |
+| 2.8 | **管控门禁**：独立 Gate 模块 + 预算检查 + 人工审核触发（7 条件）+ 质量门禁 + Fallback | 必做 | `gate.py` | `test_gate.py`：7 条件逐条验证 |
 
 ### Phase 2C：LLM 增强
 
@@ -430,8 +430,9 @@ src/airouter/
 │   ├── router/
 │   │   ├── analyzer.py             # 任务特征提取（关键词 + LLM 双模式）
 │   │   ├── classifier.py           # 策略触发条件
-│   │   ├── selector.py             # 硬约束 + 策略生成 + 评分 + 门禁
+│   │   ├── selector.py             # 硬约束过滤 + 评分（含候选级预算标签）
 │   │   ├── estimator.py            # 成本预估（3 层）
+│   │   ├── gate.py                 # 管控门禁（人工审核 + 质量门禁的唯一决定者）
 │   │   └── router.py               # Router facade
 │   ├── audit/
 │   │   ├── collector.py            # Token 采集
@@ -508,6 +509,7 @@ tests/
 │   ├── test_classifier.py
 │   ├── test_strategies.py
 │   ├── test_router.py
+│   ├── test_gate.py
 │   ├── test_adapters.py
 │   ├── test_audit.py
 │   ├── test_context_optimizer.py

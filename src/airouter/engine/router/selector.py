@@ -5,8 +5,19 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from airouter.config import ModelEntry, load_budgets, load_quality_defaults, load_routing_rules
-from airouter.models.enums import ComplexityLevel, RiskLevel, SensitivityLevel, TaskCategory
+from airouter.config import (
+    ModelEntry,
+    load_budgets,
+    load_quality_defaults,
+    load_routing_rules,
+)
+from airouter.models.enums import (
+    BudgetStatus,
+    ComplexityLevel,
+    RiskLevel,
+    SensitivityLevel,
+    TaskCategory,
+)
 from airouter.models.schemas import TaskFeatures
 
 # ── 最低覆盖率阈值（按复杂度） ──────────────────────────────
@@ -42,6 +53,8 @@ class CandidateScore:
     quality: float
     latency: float
     total_score: float
+    budget_status: BudgetStatus = BudgetStatus.OK
+    requires_approval: bool = False
 
 
 class ModelSelector:
@@ -76,6 +89,9 @@ class ModelSelector:
             if features.sensitivity == SensitivityLevel.HIGH and not model.allow_sensitive_data:
                 continue
 
+            # 5. 预算约束（soft/hard 两层，标记但不排除）
+            # 设计 4.2.3：每个候选都应带预算状态
+            # 此处仅标记，实际 budget_status 在 score_models 中写入 CandidateScore
             candidates.append(model)
 
         return candidates
@@ -113,6 +129,9 @@ class ModelSelector:
                 + weights["latency"] * latency
             )
 
+            # 候选级预算标签（设计 4.2.3 第 5 项）
+            budget_status, requires_approval = self._compute_budget_status(cost, features)
+
             scored.append(CandidateScore(
                 model=model,
                 capability=capability,
@@ -120,6 +139,8 @@ class ModelSelector:
                 quality=quality,
                 latency=latency,
                 total_score=total,
+                budget_status=budget_status,
+                requires_approval=requires_approval,
             ))
 
         return sorted(scored, key=lambda x: x.total_score, reverse=True)
@@ -240,3 +261,35 @@ class ModelSelector:
             category.value, "MEDIUM"
         )
         return str(result)
+
+    def _compute_budget_status(
+        self, raw_cost: float, features: TaskFeatures
+    ) -> tuple[BudgetStatus, bool]:
+        """计算单个候选模型的预算状态（设计 4.2.3 第 5 项）。
+
+        Args:
+            raw_cost: 预估原始成本（CNY）
+            features: 任务特征
+
+        Returns:
+            (budget_status, requires_approval)
+        """
+        complexity_key = features.complexity.value
+        task_limit = self._budgets.task_type_limits.get(complexity_key)
+        if not task_limit:
+            return BudgetStatus.OK, False
+
+        # soft_budget = min(task_budget_default, max_cost_cny)
+        project = self._budgets.projects.get(
+            "ai-router", self._budgets.projects.get("default")
+        )
+        soft_budget = min(project.task_budget_default_cny, task_limit.max_cost_cny)
+        hard_budget = soft_budget * project.task_budget_hard_limit_multiplier
+
+        if raw_cost > hard_budget:
+            return BudgetStatus.OVER_HARD_BUDGET, True
+        if raw_cost > soft_budget:
+            return BudgetStatus.OVER_BUDGET, False
+        if raw_cost > soft_budget * 0.8:
+            return BudgetStatus.WARNING, False
+        return BudgetStatus.OK, False

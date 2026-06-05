@@ -63,6 +63,13 @@
 | 53 | 能力匹配 | 4.4.1重复旧代码删除，统一引用4.2.1实现 | 修正 |
 | 54 | 成本效率 | 三种归一化（linear/sqrt/log）全部Week 2实现，不再仅实现linear | 增强 |
 | 55 | 硬约束 | hard_budget_limit从"直接排除"改为"标记需审批，保留为候选" | 修正 |
+| 56 | 管控门禁 | Selector/Gate 职责分离：Gate 成为 requires_human_review 唯一决定者 | 架构重构 |
+| 57 | 硬约束 | 预算过滤从"后置单次检查"改为"候选级标签" | 架构重构 |
+| 58 | 测试策略 | 从"通路验证"补充"政策验证"：25 条管控规则测试 | 增强 |
+| 59 | 质量基准 | quality_loss 从固定 0.90 改为候选集最高质量 | 重大修正 |
+| 60 | 管控门禁 | soft budget 不再触发人工审核，仅 warning | 语义修正 |
+| 61 | 管控门禁 | quality_loss 审核加 risk_level != LOW 前置条件 | 语义修正 |
+| 62 | 设计原则 | cost baseline 和 quality baseline 故意不对称 | 澄清 |
 
 ---
 
@@ -1099,6 +1106,80 @@ Week 2降级预案：
 - 改为：`model.budget_status = "OVER_HARD_BUDGET"; model.requires_approval = True`（保留为候选但标记需审批）
 - 同时：人工审核触发规则新增条件#3"选中模型budget_status == OVER_HARD_BUDGET"
 - 原因：如果高风险任务唯一的Tier 1候选超硬预算，直接排除会丢失"可用但需审批"选项，变成"无候选→人工兜底"
+
+---
+
+### #56-#58 Week 1 检查点后管控门禁重构
+
+Week 1 检查点通过（CLI 能跑、111 tests pass），但发现 4 个设计缺陷。根因不是"功能没做完"，而是 **Selector（评分推荐）和 Gate（管控门禁）的职责没有分离**。
+
+**#56 Selector/Gate 职责分离**
+- 原来：`router.py` 内部有 `_check_human_review()` 和 `_build_quality_gate()` 两个方法，各自独立从 features 推导，互相不知道对方结论。`quality_gate` 里有 `human_review`，但 `requires_human_review` 可以为 false。
+- 改为：创建独立的 `gate.py` 模块（`RoutingGate` 类），作为 `requires_human_review` 和 `quality_gate` 的**唯一决定者**。`router.py` 移除内部门禁方法，改为调用 Gate。
+- 新增 `GateInput` dataclass：明确定义 Gate 需要的所有输入（features、model_tier、strategy、cost、quality_loss、budget_status、forced_review_task）。
+- 关键联动：`build_quality_gate(features, requires_human_review)` — 如果 `requires_human_review=true`，`human_review` 必须在 `quality_gate` 中。
+- 原因：企业管控的核心原则是"Selector 可以推荐性价比最优，Gate 必须决定能否自动执行"。原来 Selector 做到了前半句，Gate 只做了一部分。
+- 改了之后好在哪：
+  - `requires_human_review` 和 `quality_gate` 不再矛盾
+  - Gate 可独立测试（`test_gate.py` 21 条政策测试）
+  - 后续 Week 2 加策略候选（PLAN_EXECUTE 等）时，Gate 逻辑可复用
+
+**#57 预算过滤从"后置单次检查"改为"候选级标签"**
+- 原来：预算只在 `router.py` 的 `_check_budget()` 中检查一次，只针对最终选中的模型。Selector 不知道预算信息，替代方案列表也不带预算状态。
+- 改为：
+  - `selector.py` 的 `CandidateScore` 新增 `budget_status` 和 `requires_approval` 字段
+  - `score_models()` 中为每个候选计算预算状态（`_compute_budget_status`）
+  - Router 的 `budget_status` 直接来自 `best.budget_status`（Selector 产出）
+  - 替代方案列表中展示预算状态（如"超硬预算，需审批"）
+- 预算计算：`soft_budget = min(task_budget_default, max_cost_cny)`，`hard_budget = soft_budget × multiplier`
+- 新增 `BudgetStatus.OVER_HARD_BUDGET` 枚举值
+- 原因：Week 2 做 audit/optimize 时，如果预算不是候选级 metadata，后面很难解释"为什么推荐这个而不是那个"。
+- 改了之后好在哪：
+  - 每个候选方案都有预算标签，替代方案可对比
+  - 审计时可追溯："当时 Tier 1 方案超硬预算，所以推荐了 Tier 2"
+
+**#58 测试策略从"通路验证"补充"政策验证"**
+- 原来：111 tests 主要证明 CLI 能输出、schemas 能序列化、router 能返回完整对象。`test_router_high_risk_requires_review` 用的是 ARCHITECTURE 任务，靠 `human_review_required_tasks` 配置通过，完全没测到"高风险 + Tier 2 降级"这个真正危险的 case。
+- 改为：新增 25 条政策验证测试：
+  - `test_gate.py`（21 条）：逐条测试 Gate 的 7 个条件（敏感数据、高风险降级、硬预算、软预算、质量损失、强制审核）+ 质量门禁构建 + 一致性检查
+  - `test_router.py`（4 条）：端到端政策测试（高风险+Tier 2、质量损失阈值、Gate/quality_gate 一致性、高风险+Tier 1 不误触发）
+- 关键测试：`test_policy_high_risk_tier2_must_review` — 直接覆盖 Week 1 最大 bug case
+- 原因：通路测试证明"能跑"，政策测试证明"管控规则正确"。企业级系统需要后者。
+
+---
+
+### #59-#62 quality_loss 语义修正与不对称 baseline
+
+Week 1 第二轮审查发现 quality_loss 公式错误，并确立了 cost/quality baseline 不对称的设计原则。
+
+**#59 quality_loss 从固定 0.90 改为候选集最高质量**
+- 原来：`quality_loss = max(0, 0.90 - quality)`，0.90 是拍脑袋的"理想质量基准"
+- 改为：`baseline_quality = max(scored_candidates.quality)`，`quality_loss = max(0, baseline_quality - selected_quality)`
+- 原因：0.90 不是真实 baseline。SIMPLE 任务只允许 Tier 3（质量 ≈ 0.44），用 0.90 做基准会算出 46% 的质量损失，触发 Gate 误杀省钱路径。正确语义是"在系统允许的候选范围内，质量牺牲了多少"。
+- 改了之后好在哪：
+  - SIMPLE/LOW/Tier3：baseline = Tier3，quality_loss ≈ 0，不触发审核
+  - COMPLEX+HIGH/Tier2：baseline = Tier1（在候选中），quality_loss = 0.132，真实反映降级差距
+  - EXPERT/Tier1：baseline = Tier1，quality_loss = 0，不误报
+
+**#60 soft budget 不再触发人工审核**
+- 原来：Gate 条件 4 把 `OVER_BUDGET`（soft）加入人工审核原因
+- 改为：`OVER_BUDGET` 只标记 warning 状态，不触发 `requires_human_review`。只有 `OVER_HARD_BUDGET` 触发审核。
+- 原因：设计文档原话是"超过软预算**且用户选择保持强模型方案**"才触发。MVP 无用户交互，不应替用户默认选择"保持强模型"。soft limit 语义是"提醒、引导、记录"，不是"卡死"。
+- 改了之后好在哪：演示更顺滑，不会让略超软预算的任务直接需要审批
+
+**#61 quality_loss 审核加 risk_level != LOW 前置条件**
+- 原来：`quality_loss > 0.20` 无条件触发审核
+- 改为：`risk_level != LOW and quality_loss > 0.20` 才触发
+- 原因：复杂度管"做起来难不难"，风险管"错了痛不痛"。Gate 是管控层，应该看风险。LOW risk 的 SIMPLE/LOW/Tier3 省钱路径不应被 Gate 锁死。
+- 改了之后好在哪：避免系统变成"复杂就审批、简单就放行"的粗糙规则
+
+**#62 cost baseline 和 quality baseline 故意不对称**
+- 原来：未明确区分，容易被误解为"不一致"
+- 改为：明确记录两种 baseline 的设计意图：
+  - `cost baseline = Tier 1 最贵模型成本` → 回答"相对全程强模型，省了多少钱？"（演示/商业口径）
+  - `quality baseline = 候选集最高质量` → 回答"在可选范围内，质量牺牲了多少？"（管控/风险口径）
+- 原因：两个问题本来就不是同一个问题。如果统一用 Tier 1 做 baseline，SIMPLE 任务会被误报 quality_loss（Tier 1 不在可选范围内）。如果统一用候选集，cost savings 永远是 0（没有对比）。
+- 改了之后好在哪：未来维护者不会试图"统一 baseline 让代码更干净"而破坏语义。详见 `pitfalls.md` 坑 7。
 
 ---
 

@@ -1,4 +1,11 @@
-"""Router facade：Analyzer → Selector → Estimator 串联。"""
+"""Router facade：Analyzer → Selector → Estimator → Gate 串联。
+
+职责划分：
+- Analyzer：任务特征提取
+- Selector：过滤 + 评分（推荐最优候选）
+- Estimator：成本预估
+- Gate：管控门禁（决定能否自动执行）
+"""
 
 from __future__ import annotations
 
@@ -7,6 +14,7 @@ import hashlib
 from airouter.config import ModelEntry, load_all
 from airouter.engine.router.analyzer import TaskAnalyzer
 from airouter.engine.router.estimator import CostEstimator
+from airouter.engine.router.gate import GateInput, RoutingGate
 from airouter.engine.router.selector import ModelSelector
 from airouter.models.enums import BudgetStatus, StrategyType
 from airouter.models.model_registry import ModelRegistry
@@ -28,10 +36,12 @@ class Router:
         self.estimator = CostEstimator()
         config = load_all()
         self.registry = ModelRegistry(config.models)
+        self.gate = RoutingGate()
+        self._routing_rules = self.selector._routing_rules
         self._config_version = "v1.0"
 
     def route(self, task_description: str) -> RoutingDecision:
-        """完整路由流程：分析 → 过滤 → 评分 → 预估 → 输出决策。"""
+        """完整路由流程：分析 → 过滤 → 评分 → 预估 → 门禁 → 输出决策。"""
         # 第1层：任务画像
         features = self.analyzer.extract_features(task_description)
 
@@ -42,7 +52,7 @@ class Router:
         if best is None:
             return self._escalate_to_human(features, "无候选模型满足硬约束")
 
-        # 成本预估
+        # 成本预估（用 Estimator 的精细成本，而非 Selector 的原始成本）
         cost_est = self.estimator.estimate(
             best.model, features.estimated_input_tokens, features.estimated_output_tokens
         )
@@ -54,25 +64,36 @@ class Router:
         # 质量估计
         quality = best.quality
 
-        # 替代方案
+        # 替代方案（带预算标签）
         scored = self.selector.score_models(
             self.selector.filter_candidates(all_models, features), features
         )
         alternatives = self._build_alternatives(scored, features, best.model)
 
-        # 预算状态
-        budget_status = self._check_budget(features, cost_est.total_cost)
+        # quality baseline = 候选集中最高质量（通过硬约束后的所有候选）
+        # 注意：cost baseline 和 quality baseline 使用不同基准（见 pitfalls.md 坑6）
+        baseline_quality = max(cs.quality for cs in scored) if scored else quality
+        quality_loss = round(max(0, baseline_quality - quality), 4)
 
-        # 人工审核
-        requires_review, review_reason = self._check_human_review(
-            features, best.model, budget_status, quality
+        # 第5层：管控门禁
+        # 预算状态来自 Selector 的候选级标签
+        forced_review = features.category.value in self._routing_rules.human_review_required_tasks
+        gate_input = GateInput(
+            features=features,
+            model_name=best.model.name,
+            model_tier=best.model.tier,
+            strategy=StrategyType.SINGLE_MODEL,
+            estimated_cost=cost_est.total_cost,
+            quality=quality,
+            quality_loss_vs_baseline=quality_loss,
+            budget_status=best.budget_status,
+            forced_review_task=forced_review,
         )
+        requires_review, review_reason = self.gate.check_human_review(gate_input)
+        quality_gate = self.gate.build_quality_gate(features, requires_review)
 
         # 推荐理由
         reasons = self._build_reasons(features, best, cost_est, savings)
-
-        # 质量门禁
-        quality_gate = self._build_quality_gate(features)
 
         # Fallback
         fallback = self._build_fallback(scored, best.model)
@@ -86,19 +107,20 @@ class Router:
             baseline_cost=round(baseline_cost, 4),
             estimated_savings=round(savings, 4),
             estimated_quality=round(quality, 4),
-            quality_loss_vs_baseline=round(max(0, 0.90 - quality), 4),
+            quality_loss_vs_baseline=quality_loss,
             risk_level=features.risk_level,
             requires_human_review=requires_review,
             human_review_reason=review_reason,
             reasons=reasons,
             alternatives=alternatives,
-            budget_status=budget_status,
+            budget_status=best.budget_status,
             quality_gate=quality_gate,
             fallback_policy=fallback,
             config_version=self._config_version,
         )
 
     def _escalate_to_human(self, features: TaskFeatures, reason: str) -> RoutingDecision:
+        """条件5：无候选模型满足硬约束，兜底到人工。"""
         return RoutingDecision(
             task_hash="escalate",
             task_features=features,
@@ -144,46 +166,19 @@ class Router:
             est = self.estimator.estimate(
                 cs.model, features.estimated_input_tokens, features.estimated_output_tokens
             )
+            budget_note = ""
+            if cs.budget_status == BudgetStatus.OVER_HARD_BUDGET:
+                budget_note = "（超硬预算，需审批）"
+            elif cs.budget_status == BudgetStatus.OVER_BUDGET:
+                budget_note = "（超软预算）"
             alternatives.append(AlternativeStrategy(
                 strategy=StrategyType.SINGLE_MODEL,
                 model=cs.model.name,
                 cost=round(est.total_cost, 4),
                 quality=round(cs.quality, 4),
-                note=f"Tier {cs.model.tier} 模型",
+                note=f"Tier {cs.model.tier} 模型{budget_note}",
             ))
         return alternatives[:3]
-
-    def _check_budget(self, features: TaskFeatures, cost: float) -> BudgetStatus:
-        budgets = self.selector._budgets
-        complexity_key = features.complexity.value
-        task_limit = budgets.task_type_limits.get(complexity_key)
-        if task_limit and cost > task_limit.max_cost_cny:
-            return BudgetStatus.OVER_BUDGET
-        if task_limit and cost > task_limit.max_cost_cny * 0.8:
-            return BudgetStatus.WARNING
-        return BudgetStatus.OK
-
-    def _check_human_review(
-        self,
-        features: TaskFeatures,
-        model: ModelEntry,
-        budget_status: BudgetStatus,
-        quality: float,
-    ) -> tuple[bool, str | None]:
-        reasons = []
-
-        if features.sensitivity.value == "HIGH":
-            reasons.append("任务涉及敏感数据")
-
-        if budget_status == BudgetStatus.OVER_BUDGET:
-            reasons.append("预估成本超过任务预算上限")
-
-        if features.category.value in self.selector._routing_rules.human_review_required_tasks:
-            reasons.append(f"{features.category.value} 类型任务需要人工审核")
-
-        if reasons:
-            return True, "；".join(reasons)
-        return False, None
 
     def _build_reasons(self, features, best, cost_est, savings) -> list[str]:
         reasons = [
@@ -195,31 +190,12 @@ class Router:
             reasons.append(f"相比 Tier 1 基线节省 {savings*100:.0f}%")
         return reasons
 
-    def _build_quality_gate(self, features: TaskFeatures) -> list[str]:
-        base_gates = {
-            "CODE_GENERATION": ["syntax_check", "ast_parse"],
-            "DATA_PROCESSING": ["json_schema_check"],
-            "CODE_REVIEW": ["issue_coverage_check"],
-            "BUG_ANALYSIS": ["fix_verification"],
-            "DOCUMENTATION": ["completeness_check"],
-            "ARCHITECTURE": ["human_review"],
-            "TEST_GENERATION": ["syntax_check"],
-            "REFACTORING": ["syntax_check", "ast_parse"],
-            "DEVOPS": ["syntax_check"],
-            "CONVERSATION": [],
-        }
-        gates = list(base_gates.get(features.category.value, []))
-        if features.risk_level.value == "HIGH":
-            gates.append("human_review")
-        return list(set(gates))
-
     def _build_fallback(self, scored, best_model) -> list[FallbackPolicy]:
         policies = [
             FallbackPolicy(trigger="API_TIMEOUT", action="switch_to_same_tier_alternative"),
             FallbackPolicy(trigger="FORMAT_ERROR", action="retry_with_format_hint"),
             FallbackPolicy(trigger="QUALITY_BELOW", action="upgrade_tier"),
         ]
-        # 如果有其他候选，加 NO_CANDIDATE fallback
         if len(scored) <= 1:
             policies.append(FallbackPolicy(trigger="NO_CANDIDATE", action="escalate_to_human"))
         return policies

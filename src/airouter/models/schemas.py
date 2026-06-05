@@ -235,32 +235,41 @@ class RoutingDecision(BaseModel):
 # ── ExecutionFeedback（执行反馈） ────────────────────────────
 class ExecutionFeedback(BaseModel):
     routing_decision_id: int
-    model_name: str
+    executed_strategy: Optional[str] = None
+    executed_models_json: Optional[list[str]] = None
     actual_input_tokens: int
     actual_output_tokens: int
     actual_cost_cny: float
-    latency_ms: int
+    actual_latency_ms: int
     quality_score: Optional[float] = None
+    quality_gate_passed: Optional[bool] = None
+    user_accepted: Optional[bool] = None
+    user_override_reason: Optional[str] = None
+    user_override_note: Optional[str] = None
+    actual_calls_json: Optional[list[dict]] = None
     error_type: Optional[str] = None
-    error_message: Optional[str] = None
-    user_satisfaction: Optional[int] = None  # 1-5
     created_at: datetime = Field(default_factory=datetime.now)
 
 
 # ── BenchmarkResult（Benchmark 结果） ────────────────────────
 class BenchmarkResult(BaseModel):
-    benchmark_level: int  # 1, 2, or 3
+    suite_name: str  # level1_offline / level2_comparison / level3_strategy
+    suite_version: Optional[str] = None
     case_id: str
-    case_category: TaskCategory
-    case_complexity: ComplexityLevel
-    model_name: str
-    strategy: StrategyType
+    case_version: Optional[str] = None
+    task_type: TaskCategory
+    complexity: ComplexityLevel
+    model_or_strategy: str
+    models_json: Optional[list[str]] = None
     input_tokens: int
     output_tokens: int
     cost_cny: float
-    latency_ms: int
+    actual_latency_ms: int
     quality_score: Optional[float] = None
-    evaluation_details: Optional[dict] = None
+    severe_failure: bool = False
+    gate_passed: Optional[bool] = None
+    score_detail_json: Optional[dict] = None
+    raw_output_path: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.now)
 
 

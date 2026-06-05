@@ -296,7 +296,7 @@ class TaskAnalyzer:
     def _extract_subtasks(self, desc: str, complexity: ComplexityLevel) -> list[str]:
         if complexity not in (ComplexityLevel.COMPLEX, ComplexityLevel.EXPERT):
             return []
-        # 简单规则：按 "和"/"以及"/"并且"/"+" 拆分
-        parts = re.split(r'[和以及并且+，,]', desc)
+        # 按词级分隔符拆分（"以及"/"并且" 作为完整词，不拆单字）
+        parts = re.split(r'(?:以及|并且|而且|和|及|\+|，|,)', desc)
         parts = [p.strip() for p in parts if len(p.strip()) > 4]
         return parts[:6]  # 最多 6 个子任务

@@ -72,3 +72,4 @@ class BudgetStatus(str, Enum):
     OK = "OK"
     WARNING = "WARNING"
     OVER_BUDGET = "OVER_BUDGET"
+    OVER_HARD_BUDGET = "OVER_HARD_BUDGET"
