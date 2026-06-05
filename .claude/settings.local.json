@@ -11,7 +11,8 @@
       "Bash(make test-unit:*)",
       "Bash(ruff check:*)",
       "Bash(git add:*)",
-      "Bash(git commit -m ':*)"
+      "Bash(git commit -m ':*)",
+      "Bash(ai-router analyze:*)"
     ]
   }
 }
