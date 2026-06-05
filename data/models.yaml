@@ -106,6 +106,7 @@ models:
     max_context_window: 65536
     capabilities:
       - code_gen
+      - complex_reasoning
       - documentation
       - test_generation
       - data_processing
