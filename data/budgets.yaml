@@ -1,0 +1,25 @@
+# AI Router 预算配置
+# MVP 阶段采用静态配置
+
+# ── 项目预算 ──
+projects:
+  ai-router:
+    monthly_budget_cny: 3000
+    task_budget_default_cny: 0.50
+    task_budget_hard_limit_multiplier: 3.0
+
+  default:
+    monthly_budget_cny: 5000
+    task_budget_default_cny: 1.00
+    task_budget_hard_limit_multiplier: 3.0
+
+# ── 任务类型预算上限（按复杂度） ──
+task_type_limits:
+  SIMPLE:
+    max_cost_cny: 0.05
+  MODERATE:
+    max_cost_cny: 0.30
+  COMPLEX:
+    max_cost_cny: 2.00
+  EXPERT:
+    max_cost_cny: 10.00

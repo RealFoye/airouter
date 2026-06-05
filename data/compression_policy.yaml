@@ -1,0 +1,39 @@
+# AI Router 压缩策略配置
+# B-2 压缩引擎 + B-3 预算管理使用
+
+# ── 压缩策略分级（与 risk_level 绑定） ──
+strategies:
+  conservative:
+    target_reduction_min: 0.05
+    target_reduction_max: 0.15
+    description: "只剔除明显重复/无关内容"
+    apply_when: "risk_level == HIGH"
+  standard:
+    target_reduction_min: 0.20
+    target_reduction_max: 0.30
+    description: "剔除 + 工具输出截断 + 历史摘要"
+    apply_when: "risk_level == MEDIUM, 长上下文"
+  aggressive:
+    target_reduction_min: 0.30
+    target_reduction_max: 0.50
+    description: "大幅摘要 + 多文件局部化 + 只保留关键证据"
+    apply_when: "risk_level == LOW, 超长上下文"
+
+# ── 分层压缩目标 ──
+context_length_thresholds:
+  - max_tokens: 5000
+    strategy: "none"
+    description: "不主动压缩，仅做明显冗余剔除"
+  - max_tokens: 10000
+    strategy: "conservative"
+    target_reduction: "5%-15%"
+  - max_tokens: 30000
+    strategy: "standard"
+    target_reduction: "20%-30%"
+  - max_tokens: 999999
+    strategy: "aggressive"
+    target_reduction: "30%+"
+    note: "需质量门禁"
+
+# ── 质量退化阈值 ──
+quality_drop_threshold: 0.15

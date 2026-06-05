@@ -1,0 +1,44 @@
+# AI Router 质量先验值
+# 来源：模型能力层级假设 + 少量人工先验评估 + Benchmark 校准
+
+# ── 默认质量先验（按 Tier × 任务类型） ──
+default_quality:
+  tier1:
+    architecture: 0.90
+    code_review: 0.85
+    bug_analysis: 0.85
+    code_generation: 0.80
+    refactoring: 0.82
+    documentation: 0.78
+    test_generation: 0.75
+    data_processing: 0.80
+    devops: 0.75
+    conversation: 0.85
+  tier2:
+    code_generation: 0.70
+    documentation: 0.75
+    test_generation: 0.68
+    refactoring: 0.65
+    data_processing: 0.72
+    devops: 0.65
+    conversation: 0.70
+    bug_analysis: 0.60
+    code_review: 0.60
+    architecture: 0.55
+  tier3:
+    code_generation: 0.55
+    test_generation: 0.60
+    formatting: 0.75
+    data_processing: 0.65
+    documentation: 0.55
+    conversation: 0.60
+    devops: 0.50
+    refactoring: 0.40
+    code_review: 0.35
+    bug_analysis: 0.35
+
+# ── 严重错误率默认值（按 Tier） ──
+default_failure_rates:
+  tier1: 0.03   # 3% 严重错误率
+  tier2: 0.08   # 8%
+  tier3: 0.20   # 20%

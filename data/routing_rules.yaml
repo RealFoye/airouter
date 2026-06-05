@@ -1,0 +1,133 @@
+# AI Router 路由规则配置
+# 权重、阈值、allowed_tiers、策略质量权重
+
+# ── 多目标评分权重（按任务类型动态调整） ──
+routing_weights:
+  default:
+    capability: 0.35
+    cost: 0.30
+    quality: 0.20
+    latency: 0.15
+  ARCHITECTURE:
+    capability: 0.40
+    quality: 0.35
+    cost: 0.15
+    latency: 0.10
+  TEST_GENERATION:
+    capability: 0.25
+    cost: 0.40
+    quality: 0.20
+    latency: 0.15
+  BUG_ANALYSIS:
+    capability: 0.40
+    quality: 0.30
+    cost: 0.20
+    latency: 0.10
+  CODE_REVIEW:
+    capability: 0.40
+    quality: 0.30
+    cost: 0.15
+    latency: 0.15
+  DOCUMENTATION:
+    capability: 0.25
+    cost: 0.40
+    quality: 0.20
+    latency: 0.15
+  CODE_GENERATION:
+    capability: 0.35
+    cost: 0.30
+    quality: 0.20
+    latency: 0.15
+  REFACTORING:
+    capability: 0.35
+    quality: 0.25
+    cost: 0.25
+    latency: 0.15
+  DATA_PROCESSING:
+    capability: 0.25
+    cost: 0.45
+    quality: 0.15
+    latency: 0.15
+  DEVOPS:
+    capability: 0.30
+    cost: 0.35
+    quality: 0.20
+    latency: 0.15
+  CONVERSATION:
+    capability: 0.30
+    cost: 0.35
+    quality: 0.20
+    latency: 0.15
+
+# ── 允许 Tier 过滤（按复杂度 + 风险） ──
+allowed_tiers:
+  SIMPLE:
+    default: [3]
+    high_risk: [2, 3]
+  MODERATE:
+    default: [2, 3]
+    high_risk: [1, 2]
+  COMPLEX:
+    default: [1, 2]
+    high_risk: [1, 2]
+  EXPERT:
+    default: [1]
+    high_risk: [1]
+
+# ── Top-K 候选模型选择（避免组合爆炸） ──
+top_k_by_tier:
+  tier1:
+    k: 2
+    pre_score:
+      capability: 0.50
+      quality: 0.35
+      cost: 0.15
+  tier2:
+    k: 2
+    pre_score:
+      capability: 0.40
+      quality: 0.30
+      cost: 0.30
+  tier3:
+    k: 2
+    pre_score:
+      capability: 0.30
+      quality: 0.20
+      cost: 0.50
+
+# ── 策略质量组合权重 ──
+strategy_quality_weights:
+  GUIDED_EXECUTE:
+    plan: 0.00
+    execute: 0.70
+    review: 0.30
+  PLAN_EXECUTE:
+    plan: 0.55
+    execute: 0.45
+    review: 0.00
+  PLAN_EXECUTE_REVIEW:
+    plan: 0.45
+    execute: 0.35
+    review: 0.20
+
+# ── 硬约束 ──
+constraints:
+  min_capability_coverage: 0.50
+
+# ── 人工审核强制任务类型 ──
+human_review_required_tasks:
+  - ARCHITECTURE
+
+# ── 成本敏感度（按任务类型） ──
+# HIGH=linear, MEDIUM=sqrt, LOW=log
+cost_sensitivity_by_task_type:
+  CODE_GENERATION: MEDIUM
+  CODE_REVIEW: LOW
+  REFACTORING: MEDIUM
+  BUG_ANALYSIS: LOW
+  DOCUMENTATION: HIGH
+  ARCHITECTURE: LOW
+  TEST_GENERATION: HIGH
+  DATA_PROCESSING: HIGH
+  DEVOPS: MEDIUM
+  CONVERSATION: HIGH

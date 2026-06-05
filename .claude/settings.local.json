@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip install:*)",
+      "Bash(python -c \"import airouter; print\\('import OK'\\)\")",
+      "Bash(ai-router --help)",
+      "Bash(pytest tests/ --co -q)",
+      "Bash(pytest:*)",
+      "Bash(python:*)",
+      "Bash(make lint:*)",
+      "Bash(make test-unit:*)",
+      "Bash(ruff check:*)"
+    ]
+  }
+}

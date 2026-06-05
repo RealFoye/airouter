@@ -1,0 +1,121 @@
+# AI Router 模型注册表
+# MVP 初始估计，需实测 API 后校准定价
+
+models:
+  # ── Tier 1（重型）：规划、架构、复杂推理 ──
+  - name: "qwen3.7-max"
+    tier: 1
+    provider: "dashscope"
+    api_base: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    input_price_per_1k: 0.02      # CNY per 1K tokens
+    output_price_per_1k: 0.06
+    max_context_window: 131072
+    capabilities:
+      - code_gen
+      - complex_reasoning
+      - architecture
+      - code_review
+      - security
+      - scalability
+      - documentation
+      - test_generation
+      - data_processing
+    allow_sensitive_data: true
+    latency_estimate_ms: 3000
+    cache:
+      supports_prompt_caching: true
+      cache_mode: explicit_or_implicit
+      cache_write_price_multiplier: 1.25
+      cache_read_price_ratio: 0.10
+      cache_min_prefix_tokens: 1024
+      cache_ttl_seconds: 300
+
+  - name: "deepseek-v4-pro"
+    tier: 1
+    provider: "deepseek"
+    api_base: "https://api.deepseek.com/v1"
+    input_price_per_1k: 0.015
+    output_price_per_1k: 0.05
+    max_context_window: 131072
+    capabilities:
+      - code_gen
+      - complex_reasoning
+      - architecture
+      - code_review
+      - security
+      - documentation
+      - test_generation
+      - data_processing
+    allow_sensitive_data: true
+    latency_estimate_ms: 3500
+    cache:
+      supports_prompt_caching: false
+
+  # ── Tier 2（标准）：通用编码、文档生成 ──
+  - name: "qwen3.7-plus"
+    tier: 2
+    provider: "dashscope"
+    api_base: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    input_price_per_1k: 0.008
+    output_price_per_1k: 0.02
+    max_context_window: 131072
+    capabilities:
+      - code_gen
+      - complex_reasoning
+      - code_review
+      - documentation
+      - test_generation
+      - data_processing
+      - formatting
+    allow_sensitive_data: true
+    latency_estimate_ms: 2000
+    cache:
+      supports_prompt_caching: true
+      cache_mode: explicit_or_implicit
+      cache_write_price_multiplier: 1.25
+      cache_read_price_ratio: 0.10
+      cache_min_prefix_tokens: 1024
+      cache_ttl_seconds: 300
+
+  - name: "glm-5.1"
+    tier: 2
+    provider: "zhipu"
+    api_base: "https://open.bigmodel.cn/api/paas/v4"
+    input_price_per_1k: 0.01
+    output_price_per_1k: 0.025
+    max_context_window: 128000
+    capabilities:
+      - code_gen
+      - complex_reasoning
+      - documentation
+      - test_generation
+      - data_processing
+      - formatting
+    allow_sensitive_data: true
+    latency_estimate_ms: 2500
+    cache:
+      supports_prompt_caching: false
+
+  # ── Tier 3（快速）：执行、批量、简单任务 ──
+  - name: "deepseek-v4-flash"
+    tier: 3
+    provider: "deepseek"
+    api_base: "https://api.deepseek.com/v1"
+    input_price_per_1k: 0.002
+    output_price_per_1k: 0.005
+    max_context_window: 65536
+    capabilities:
+      - code_gen
+      - documentation
+      - test_generation
+      - data_processing
+      - formatting
+    allow_sensitive_data: false
+    latency_estimate_ms: 1000
+    cache:
+      supports_prompt_caching: true
+      cache_mode: implicit
+      cache_write_price_multiplier: 1.0
+      cache_read_price_ratio: 0.10
+      cache_min_prefix_tokens: 1024
+      cache_ttl_seconds: 300
