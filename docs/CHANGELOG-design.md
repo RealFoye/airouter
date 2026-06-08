@@ -91,6 +91,7 @@
 | 81 | 优化引擎 | Review 三轮修复：requires_approval 按建议后方案重新判断 + 汇总逻辑抽取 + Engine 参数校验 | 修正 |
 | 82 | 优化引擎 | Review 四轮修复：审批提示浮到 CLI 顶层 + budget_status 用真实计算 + Rich 表审批标签 | 修正 |
 | 83 | Benchmark | Level 1 离线规则 Benchmark：40 条 YAML case + 6 指标 + CLI + 零 API 成本 | 新增 |
+| 84 | Benchmark | Level 2 模型质量 Benchmark：30 条 case × 3 模型 + auto-score + JSONL 断点续跑 | 新增 |
 
 ---
 
@@ -1509,6 +1510,48 @@ Week 1 第二轮审查发现 quality_loss 公式错误，并确立了 cost/quali
 - 40 条样例覆盖 8 个维度（简单/中等/复杂/高风险/PE/Gate/Context/Budget）
 - 6 指标量化路由质量，硬约束保证安全底线
 - CLI 支持 Rich/JSON 双格式输出，便于自动化和人工审查
+
+---
+
+### #84 Level 2 模型质量 Benchmark：30 条 case × 3 模型 + auto-score + JSONL 断点续跑
+
+**原来怎么做：**
+- Level 2 计划 Week 3 实现，包含 LLM-as-Judge + 代码执行 + DB 落库
+- 与 Level 1 共享 runner，无独立 executor 层
+
+**现在改成什么：**
+- MVP 版本提前实现：30 条核心 case × 3 模型（qwen3.7-max / qwen3.7-plus / deepseek-v4-flash）
+- 只做 auto-score（AST + 结构检查 + 关键词匹配），不执行模型生成代码，不做 LLM-as-Judge
+- 新增 ModelExecutor 层：通过 AdapterFactory 调用模型，force_mock=True 默认安全
+- 文件态断点续跑：JSONL 结果文件（source of truth）+ JSON 状态文件 + 原子写入
+- 运行产物隔离：`runs/benchmarks/level2/{run_id}/`，.gitignore 排除
+- CLI 扩展：--level 2 + --real-api + --models + --rate-limit + --run-id + --output-dir + --limit
+
+**为什么改：**
+- L2 是路由质量验证的核心环节，延迟到 Week 3 风险太大
+- MVP 先跑通 auto-score 链路，LLM-as-Judge 和代码执行推到后续增强
+- force_mock 默认 True 防止误触发真实 API 调用
+- JSONL 而非 SQLite 是因为不需要复杂查询，且文件态更便于版本控制和共享
+
+**改了之后好在哪：**
+- 可验证模型实际输出质量，弥补 L1 只做离线规则验证的不足
+- 6 类评分函数覆盖所有任务类型（codegen/review/bug/doc/refactor/architecture）
+- 断点续跑支持中断恢复，避免 90 次 API 调用因网络中断而浪费
+- mock 模式零成本开发测试，--real-api 显式开启真实调用
+- JSONL 去重 + state 原子写入保证崩溃一致性
+
+**文件清单：**
+- `src/airouter/engine/benchmark/executor.py`：ModelExecutor（retry + rate limit + cost）
+- `src/airouter/engine/benchmark/evaluator.py`：6 个自动评分函数 + any_of 匹配
+- `src/airouter/engine/benchmark/loader.py`：新增 load_l2_cases()
+- `src/airouter/engine/benchmark/runner.py`：Level2BenchmarkRunner
+- `src/airouter/engine/benchmark/schemas.py`：L2Case / ExecutorResult / L2CaseResult / L2Summary / RunState
+- `src/airouter/cli/benchmark.py`：L2 CLI 选项 + Rich/JSON 输出
+- `data/benchmarks/level2/router_quality_cases.yaml`：30 条 case
+- `tests/unit/test_evaluator.py`：23 个评分器测试
+- `tests/unit/test_executor.py`：9 个执行器测试
+- `tests/unit/test_benchmark_l2.py`：15 个 Runner 测试
+- `tests/integration/test_benchmark_level2.py`：8 个集成测试
 
 ---
 

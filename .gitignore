@@ -38,3 +38,6 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Benchmark runtime artifacts
+runs/
