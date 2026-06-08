@@ -351,26 +351,14 @@ class Level2BenchmarkRunner:
             failed_pairs=0,
         )
 
-        # Load existing failed pairs from JSONL for state
-        if jsonl_path and jsonl_path.exists():
-            existing_records = _dedup_results_from_jsonl(jsonl_path)
-            state.failed = [
-                FailedPair(
-                    pair=f"{r['case_id']}::{r['model']}",
-                    error=r.get("error_message", "unknown"),
-                    attempts=r.get("attempts", 1),
-                )
-                for r in existing_records
-                if r.get("status") == "failed"
-            ]
-            state.failed_pairs = len(state.failed)
-
         # Write initial state
         self._write_state(run_dir, state)
 
         # 11. Execute pairs
         auth_aborted = False
+        run_count = 0
         for case, model in pending_pairs:
+            run_count += 1
             pair_key = f"{case.id}::{model}"
             started_at = datetime.now().isoformat(timespec="seconds")
 
@@ -419,8 +407,7 @@ class Level2BenchmarkRunner:
                 self._write_state(run_dir, state)
 
                 # Progress
-                done = state.completed_pairs + state.failed_pairs
-                self._progress(done, total_pairs, case.id, model, score.overall_score)
+                self._progress(run_count, len(pending_pairs), case.id, model, score.overall_score)
 
             except AdapterAuthError as e:
                 logger.error("Auth error for model=%s: %s — aborting run", model, e)
@@ -466,7 +453,24 @@ class Level2BenchmarkRunner:
                 if fail_fast:
                     break
 
-        # 12. Finalize
+        # 12. Finalize — rebuild state from deduped JSONL (source of truth)
+        deduped = _dedup_results_from_jsonl(jsonl_path)
+        final_success = [r for r in deduped if r.get("status") == "success"]
+        final_failed = [r for r in deduped if r.get("status") == "failed"]
+
+        state.completed = [
+            f"{r['case_id']}::{r['model']}" for r in final_success
+        ]
+        state.completed_pairs = len(final_success)
+        state.failed = [
+            FailedPair(
+                pair=f"{r['case_id']}::{r['model']}",
+                error=r.get("error_message", "unknown"),
+                attempts=r.get("attempts", 1),
+            )
+            for r in final_failed
+        ]
+        state.failed_pairs = len(final_failed)
         state.status = "completed" if not auth_aborted else "auth_aborted"
         state.last_updated_at = datetime.now().isoformat(timespec="seconds")
         self._write_state(run_dir, state)

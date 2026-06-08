@@ -154,6 +154,48 @@ class TestResume:
         with pytest.raises(ValueError, match="cases_hash 不匹配"):
             runner2.run(resume=True, run_id=summary.run_id)
 
+    def test_resume_failed_then_success(self, cases_yaml, output_dir, monkeypatch):
+        """Failed pair succeeds on resume: run_completed=True, failed_pairs=0."""
+        from airouter.adapters.base import AdapterError
+
+        runner = _make_runner(cases_yaml, output_dir)
+
+        # First run: make first pair fail
+        call_count = 0
+        original_execute = runner._executor.execute
+
+        def failing_execute(model_name, messages, max_tokens=None):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise AdapterError("simulated failure")
+            return original_execute(model_name, messages, max_tokens)
+
+        monkeypatch.setattr(runner._executor, "execute", failing_execute)
+        summary1 = runner.run()
+
+        # First run: 1 failed, 3 success
+        assert summary1.completed_pairs == 3
+        assert summary1.failed_pairs == 1
+        assert summary1.run_completed is False
+
+        # Resume: no monkeypatch, all pairs succeed
+        runner2 = _make_runner(cases_yaml, output_dir)
+        summary2 = runner2.run(resume=True, run_id=summary1.run_id)
+
+        # All 4 pairs now success, no failures
+        assert summary2.completed_pairs == 4
+        assert summary2.failed_pairs == 0
+        assert summary2.run_completed is True
+
+        # State file matches
+        state_path = output_dir / summary1.run_id / "run_state.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        assert state["completed_pairs"] == 4
+        assert state["failed_pairs"] == 0
+        assert len(state["completed"]) == 4
+        assert len(state["failed"]) == 0
+
     def test_resume_validates_models(self, cases_yaml, output_dir):
         """Resume with different models should fail."""
         runner = _make_runner(cases_yaml, output_dir)
