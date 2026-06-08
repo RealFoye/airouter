@@ -32,6 +32,23 @@
 - MODERATE任务 → Tier 2模型单模型处理（最佳性价比）
 - SIMPLE任务 → Tier 3模型直接处理（最低成本）
 
+### 1.4 Week 1 交付物覆盖
+
+第 1 周交付物是可用于架构 Review 的《系统设计文档》，本文作为权威设计文档，配套调研材料如下：
+
+| PDF 要求 | 覆盖位置 | 说明 |
+|----------|----------|------|
+| 竞品调研 | `docs/competitive-analysis.md` | OpenRouter / LiteLLM / Helicone / Langfuse / Claude Code 用量体系对比 |
+| 6+ 大模型定价与统一成本模型 | `docs/competitive-analysis.md` + 本文 4.5 | 覆盖 Anthropic、OpenAI、DeepSeek、Gemini 与 MVP 国产模型配置 |
+| Claude Prompt Caching / Extended Thinking / Batch API | `docs/competitive-analysis.md` 第五章 + 本文 4.5.2 | 记录适用场景、成本公式和决策树 |
+| 任务分类体系 | 本文 4.1 | 13 维特征、10 类任务、4 级复杂度、能力需求映射 |
+| 路由引擎架构与算法伪代码 | 本文第二章、第四章 | 五层决策架构、硬约束、评分、门禁、fallback |
+| Token 采集与审计架构 | 本文第十章、7.2 | routing_decisions + execution_feedback + audit 查询链路 |
+| 技术选型 | 本文第三章 | 选型表、对比决策、风险缓解 |
+| 接口定义 | 本文 2.3、7.x CLI 设计 | REST API 摘要 + CLI 命令契约 |
+
+> 说明：Prompt Caching 命中率、延迟、质量影响等“实测数据”需要真实 API 配额与运行样本。Week 1 交付先完成公式、实验方案和记录字段；Week 2-3 通过 Benchmark 与执行反馈补齐实测数据。
+
 ---
 
 ## 二、系统架构
@@ -105,6 +122,58 @@ DeepSeek Qwen   GLM   (未来扩展)
     替代方案、预算状态、审核要求、质量门禁、兜底策略
 ```
 
+### 2.3 API 接口定义（OpenAPI 摘要）
+
+FastAPI 会自动生成 OpenAPI Spec；本节定义 Week 1 架构评审需要的接口契约，Week 2-3 按此落地实现。
+
+| Method | Path | 用途 | Request | Response |
+|--------|------|------|---------|----------|
+| GET | `/health` | 健康检查 | - | `{status: "ok"}` |
+| POST | `/api/route/analyze` | 任务描述 -> 路由决策 | `RouteAnalyzeRequest` | `RoutingDecision` |
+| GET | `/api/models` | 查询模型注册表 | `tier? provider? capability?` | `ModelConfig[]` |
+| POST | `/api/feedback` | 写入执行反馈 | `ExecutionFeedbackCreate` | `ExecutionFeedback` |
+| POST | `/api/audit/query` | 消费聚合查询 | `AuditQueryRequest` | `AuditSummary` |
+| GET | `/api/audit/waste-patterns` | Top N 浪费模式 | `days, project_id?, user_id?` | `WastePattern[]` |
+| POST | `/api/optimize/prompt` | Prompt/上下文优化建议 | `OptimizeRequest` | `OptimizeResult` |
+| GET | `/api/benchmark/results` | Benchmark 结果查询 | `suite_name?, task_type?` | `BenchmarkResult[]` |
+| GET | `/api/rules` | 读取路由规则 | - | `RoutingRulesSnapshot` |
+| POST | `/api/rules/draft` | 生成规则变更草案 | `RuleDraftRequest` | `RuleDraft` |
+
+核心请求/响应对象：
+
+```python
+class RouteAnalyzeRequest(BaseModel):
+    task_description: str
+    user_id: str | None = None
+    project_id: str = "default"
+    department: str | None = None
+    client_type: str = "cli"
+    max_cost_cny: float | None = None
+    quality_requirement: float | None = None
+    allow_human_review: bool = True
+
+class AuditQueryRequest(BaseModel):
+    start_date: date
+    end_date: date
+    group_by: list[str]  # day/user/department/project/model/task_type/client_type
+    filters: dict[str, str] = {}
+    use_actual_when_available: bool = True
+
+class OptimizeRequest(BaseModel):
+    prompt: str | None = None
+    prompt_path: str | None = None
+    model_name: str | None = None
+    scenario: str = "SINGLE_TURN"
+    expected_turns: int = 1
+```
+
+接口设计原则：
+
+- API 返回的 `RoutingDecision` 与 CLI JSON 输出使用同一 Pydantic schema，避免两套契约。
+- 所有成本相关响应必须带 `estimated` / `actual` 标识。
+- 写反馈接口只追加，不修改原始路由决策，保证审计不可抵赖。
+- 规则变更先生成 draft，不自动应用；管理员批准后才进入配置版本。
+
 ---
 
 ## 三、技术选型
@@ -126,6 +195,27 @@ DeepSeek Qwen   GLM   (未来扩展)
 - Streamlit零前端代码，所有UI用Python写，节省至少5天开发时间
 - 内置st.line_chart/st.bar_chart/st.dataframe，消费看板开箱即用
 - 如果Week 3提前完成核心功能，可以再迁移到React（但优先级低）
+
+### 3.1 选型对比与决策依据
+
+| 维度 | 候选 | 最终选择 | 决策依据 |
+|------|------|----------|----------|
+| 后端 | FastAPI / Flask / Django / Go Fiber | FastAPI | Pydantic schema 与 OpenAPI 原生契合，适合快速暴露路由、审计、Benchmark API |
+| 前端 | Streamlit / React / Vue / Next.js | Streamlit | 4 周交付优先验证路由和看板，Streamlit 能用 Python 直接复用 engine/service 层 |
+| 数据库 | SQLite / PostgreSQL / ClickHouse | SQLite 起步，保留 PostgreSQL 迁移口 | MVP 调用量低，审计查询可控；SQLAlchemy 保留迁移空间 |
+| 模型接入 | openai SDK / 各供应商 SDK / LiteLLM | openai SDK + Adapter | 国产模型大多支持 OpenAI-compatible API；后续可加 LiteLLM/OpenRouter adapter |
+| 配置 | YAML / DB 管理后台 / 远程配置中心 | YAML | Week 1-2 规则频繁迭代，Git diff 可审查；Week 3 管理后台先做只读/草案 |
+| 可观测性 | 自研 SQLite 聚合 / Langfuse / Helicone | MVP 自研，后续可接 Langfuse/Helicone | 当前核心是路由与审计闭环，不先引入外部平台复杂度 |
+
+### 3.2 技术风险与缓解
+
+| 风险 | 影响 | 缓解策略 |
+|------|------|----------|
+| Streamlit 不适合复杂权限/交互 | Week 3 Web 工作台扩展受限 | MVP 只做内部管控台；API 与 engine 分层清楚，未来可换 React |
+| SQLite 写入并发有限 | 多用户高频调用时写锁竞争 | MVP 使用单机 SQLite；生产迁移 PostgreSQL，接口层不变 |
+| 供应商价格和缓存语义变化 | 成本预估失真 | 所有价格进入 `models.yaml` 和 `config_snapshots`；审计时展示配置版本 |
+| 规则分类冷启动不准 | 推荐质量波动 | 先规则可解释，Week 2-3 用 Benchmark 和 feedback 校准 |
+| 外部 API 不可用 | Demo/测试阻塞 | MockAdapter + 离线 Benchmark + 预缓存演示数据 |
 
 ---
 
@@ -225,6 +315,20 @@ KEYWORD_RULES = {
     ...
 }
 ```
+
+#### 4.1.4 分类体系到模型推荐映射
+
+任务分类不是为了展示标签，而是直接决定候选 Tier、预算、质量门禁和是否需要人工批准。
+
+| 任务画像 | 典型任务 | 推荐策略 | 推荐 Tier | Token 预估 | 质量/管控要求 |
+|----------|----------|----------|-----------|------------|---------------|
+| SIMPLE + LOW risk + HIGH verifiability | 写回文函数、格式转换、简单单测 | SINGLE_MODEL | Tier 3 | 1K-3K input / 0.3K-1K output | syntax_check / ast_parse |
+| SIMPLE + HIGH risk | 删除生产数据脚本、权限配置修改 | SINGLE_MODEL + pre-execution approval | Tier 2/Tier 1 | 1K-5K / 0.5K-2K | 人工批准 + human_review gate |
+| MODERATE + MEDIUM risk | 重构登录模块、生成 API 文档 | SINGLE_MODEL | Tier 2 | 5K-15K / 1K-4K | 自动验证 + 可选 LLM judge |
+| COMPLEX + HIGH reasoning | 并发 Bug 分析、跨模块重构 | PLAN_EXECUTE 或 Tier 1 SINGLE_MODEL | Tier 1 规划，Tier 2/3 执行 | 15K-50K / 3K-10K | fix_verification + human_review |
+| ARCHITECTURE + LOW verifiability | 百万并发系统设计、微服务拆分 | PLAN_EXECUTE_REVIEW | Tier 1 + reviewer | 10K-30K / 4K-12K | llm_judge + human_review |
+| HEAVY/EXTREME context | 全项目审查、长上下文代码理解 | 先 Context Budget，再路由 | Tier 1/Tier 2 | 50K+ input | 上下文裁剪日志 + 回退策略 |
+| DOCUMENTATION 批量任务 | 批量生成 README/API 文档 | Batch + Tier 2/Tier 3 | Tier 2/3 | 单任务 3K-10K | 可走 Batch，允许较高延迟 |
 
 ---
 
@@ -361,51 +465,63 @@ def filter_candidates(all_models, features):
 | MEDIUM | Tier 2 | 平衡成本与质量 |
 | HIGH | Tier 2（不建议Tier 3） | 即使有审查，Tier 3执行高风险任务仍不可靠 |
 
+**角色级能力过滤（实现说明）：**
+- planner/reviewer/single：使用任务级 `capability_score()`（全局能力需求）
+- executor：使用 `EXECUTOR_CAPABILITY_REQUIREMENTS`（只检查执行级能力，如 `code_gen`，不要求 `architecture` 等全局能力）
+- 这样 ARCHITECTURE 类任务的 PER 策略不会被"executor 缺 architecture 能力"误杀
+
 #### 4.3.2 策略触发条件
 
+> **实现说明**：触发条件判断由独立的 `StrategyClassifier` 模块完成（`classifier.py`），
+> 只负责结构条件（输入 TaskFeatures，输出 ClassificationResult）。
+> 成本节省率和质量损失率不在 Classifier 中判断，而是在 Selector 的 post-filter 阶段做硬性排除。
+
 ```python
-def generate_strategy_candidates(features, candidates):
-    strategies = []
-
-    # SINGLE_MODEL：始终作为候选
-    strategies.append(Strategy("SINGLE_MODEL", candidates))
-
-    # GUIDED_EXECUTE：中等模型执行 + 强模型审查
-    if should_use_guided_execute(features):
-        strategies.append(build_guided_execute(candidates))
-
-    # PLAN_EXECUTE：强模型规划 + 低成本模型执行
-    if should_use_plan_execute(features):
-        strategies.append(build_plan_execute(features, candidates))
-
-    # PLAN_EXECUTE_REVIEW：规划 + 执行 + 审查
-    if should_use_plan_execute_review(features):
-        strategies.append(build_plan_execute_review(features, candidates))
-
-    return strategies
+class StrategyClassifier:
+    def classify(self, features: TaskFeatures) -> ClassificationResult:
+        # SINGLE_MODEL 始终包含
+        # Plan-Execute: 5 个结构条件
+        # Guided Execute: 4 个结构条件
+        # PER: base_decomposable AND review_need
+        ...
 ```
 
-**Plan-Execute 触发条件（必须全部满足）：**
+**Plan-Execute 触发条件（结构条件，必须全部满足）：**
 1. `complexity` ∈ {COMPLEX, EXPERT}
 2. `estimated_output_tokens` ≥ 500（输出量足够大，规划开销才值得）
 3. `reasoning_intensity` ∈ {HIGH, VERY_HIGH}
 4. `subtasks` 数量 ≥ 2（任务可分解）
 5. `verifiability` ≥ MEDIUM 或 `risk_level` == LOW（结果可验证或风险低）
-6. 预估成本节省率 ≥ 15%（break-even分析通过）
-7. 预估质量损失 ≤ 15%
+
+**Selector post-filter 硬性排除（在策略候选生成后执行）：**
+6. 预估成本节省率 < 15%（相对 Tier 1 baseline，非 SINGLE 策略）
+7. 预估质量损失 > 15%（相对候选集最高质量）
 
 **Plan-Execute 最适合的不是"复杂任务"，而是：复杂但可拆解、执行步骤明确、输出量大、结果可验证、执行风险不高的任务。**
 
-**Guided Execute 触发条件：**
+**Guided Execute 触发条件（结构条件）：**
 1. `complexity` ∈ {MODERATE, COMPLEX}
 2. `estimated_output_tokens` ≥ 800
 3. `risk_level` != LOW（低风险不需要审查开销）
-4. 预估成本节省率 ≥ 20%
-5. `verifiability` != LOW 或 `risk_level` != HIGH（不能同时低可验证+高风险）
+4. `verifiability` != LOW 或 `risk_level` != HIGH（不能同时低可验证+高风险）
+
+> Selector post-filter 还会排除节省率 < 15% 的 Guided Execute 候选。
+
+**Plan-Execute-Review 触发条件：**
+- base_decomposable（Plan-Execute 条件 1-4）AND review_need：
+  - `risk_level` == HIGH，或
+  - `verifiability` == LOW，或
+  - `category` 在 `human_review_required_tasks` 列表中
 
 #### 4.3.3 Top-K 控制避免组合爆炸
 
-每个Tier先按pre_score选出Top-K候选模型，再生成策略组合：
+每个角色模型池内按Tier做Top-K筛选，避免 planner × executor × reviewer 组合爆炸：
+
+```python
+# 在每个角色池内做 Top-K（不是全局）
+for role in ["planner", "executor", "reviewer", "single"]:
+    role_pool[role] = select_top_k_per_tier(role_pool[role], features)
+```
 
 ```yaml
 top_k_by_tier:
@@ -606,6 +722,8 @@ def strategy_quality(strategy):
 ### 4.5 成本预估模型
 
 成本预估分为三层独立计算：**基础成本 → 缓存调整 → Plan-Execute上下文局部化**。三层互不干扰，最终叠加。
+
+外部模型定价、竞品能力和统一成本公式的详细调研见 `docs/competitive-analysis.md`。本节只保留系统内的可执行估算模型；所有价格最终以 `data/models.yaml` 和 `config_snapshots` 中的配置快照为准。
 
 #### 4.5.1 第一层：基础成本（不含缓存）
 
@@ -902,19 +1020,26 @@ task_hard_budget = task_soft_budget * project.task_budget_hard_limit_multiplier
 
 #### 4.6.2 人工审核触发规则
 
+`requires_human_review` 表示**执行前批准**（pre-execution approval）：路由系统已经给出推荐，但在真正调用模型或执行高风险方案前，需要人工确认。
+
 MVP阶段，如果满足以下**任一条件**，则 `requires_human_review = true`：
 
 1. `sensitivity == HIGH`（涉及敏感数据）
 2. `risk_level == HIGH` 且使用了降级/拆分策略（即 `strategy != SINGLE_MODEL` 或 `executor_tier > 1`）
 3. 选中模型的 `budget_status == "OVER_HARD_BUDGET"`（超硬预算，需审批才可执行）
-4. `estimated_cost > soft_budget_limit` 且用户选择保持强模型方案
-5. 无候选模型满足所有硬约束（系统兜底）
-6. `quality_loss_vs_baseline > 0.20`（质量损失超过阈值）
-7. 任务类型在 `human_review_required_tasks` 配置列表中
+4. 无候选模型满足所有硬约束（系统兜底）
+5. `risk_level != LOW` 且 `quality_loss_vs_baseline > 0.20`（质量损失超过阈值）
+6. 任务类型在 `human_review_required_tasks` 配置列表中
 
-**关键：** 高风险任务只要没有全程使用Tier 1，就需要人工确认。风险来自"执行错误后果"，不是"花钱多"。
+Soft budget 超限不在 MVP 阶段自动触发人工批准，只作为 warning 和替代方案提示；hard budget 才触发批准或过滤。后续若加入交互式“用户选择保持强模型方案”，可把 soft budget + user confirmation 作为审批条件。
+
+`quality_loss_vs_baseline` 的 baseline 是**候选集内最高质量方案**，用于管控“在可执行方案中是否牺牲太多质量”；`estimated_savings` 的 baseline 是 Tier 1 成本基线，用于展示“相比强模型省多少钱”。两者故意不对称。
+
+**关键：** 高风险任务只要没有全程使用 Tier 1，就需要人工确认。风险来自"执行错误后果"，不是"花钱多"。
 
 #### 4.6.3 质量门禁
+
+质量门禁表示**执行后验收**（post-execution review gate）：模型输出已经生成，系统需要通过自动检查、LLM judge 或人工验收来判断结果是否可接受。因此可能出现 `requires_human_review = false`，但 `quality_gate` 中仍包含 `human_review` 的情况，例如高风险任务使用 Tier 1 执行时不需要执行前批准，但结果仍需要人工验收。
 
 质量门禁以 `task_type` 决定具体检查类型，`verifiability` 决定能否自动检查，`output_strictness` 和 `risk_level` 决定是否追加额外检查。
 
@@ -1040,61 +1165,33 @@ def route(task_description: str) -> RoutingDecision:
     # ━━━ 第1层：任务画像 ━━━
     features = analyzer.extract_features(task_description)
 
-    # ━━━ 第2层：硬约束过滤 ━━━
-    constraints = build_constraints(features)
-    candidates = []
-    for model in ALL_MODELS:
-        if capability_score(model, features) < constraints.min_capability_coverage:
-            continue
-        if model.tier not in constraints.allowed_tiers:
-            continue
-        if model.max_context_window < features.estimated_input_tokens:
-            continue
-        if features.sensitivity == "HIGH" and not model.allow_sensitive_data:
-            continue
-        candidates.append(model)
+    # ━━━ 第2-3层：策略分类 + 候选生成（Selector 内部完成） ━━━
+    # StrategyClassifier：结构条件判断（TaskFeatures → 哪些策略有资格）
+    classification = classifier.classify(features)
 
-    if not candidates:
+    # ModelSelector：基础过滤 → 角色池（含角色级能力过滤）→ Top-K → 策略候选 + 评分 + post-filter
+    strategy_scores = selector.select_best_strategy(
+        classification.strategies, all_models, features, estimator
+    )
+    # post-filter：quality_loss > 15% 排除，
+    # 非 SINGLE 且 savings < 15%（相对 Tier 1 baseline）排除
+
+    if not strategy_scores:
         return escalate_to_human_review(features, reason="NO_CANDIDATE")
 
-    # ━━━ 第3层：策略候选生成 ━━━
-    # Top-K控制：每个Tier只取最优的2个模型
-    tier_candidates = select_top_k_per_tier(candidates)
-    strategy_candidates = generate_strategy_candidates(features, tier_candidates)
+    best = strategy_scores[0]
 
-    # ━━━ 第4层：多目标评分 ━━━
-    scored = []
-    weights = get_weights(features)  # 按任务类型动态获取权重
-    all_costs = [estimate_cost(s, features) for s in strategy_candidates]
-
-    for strategy in strategy_candidates:
-        cost = estimate_cost(strategy, features)
-        quality = estimate_strategy_quality(strategy, features)
-        capability = strategy_capability_score(strategy, features)
-        latency = estimate_strategy_latency(strategy, features)
-
-        # 质量损失检查
-        if quality_loss_vs_baseline(strategy, quality) > constraints.max_quality_loss:
-            continue
-        # 节省率检查（SINGLE_MODEL除外）
-        if strategy.name != "SINGLE_MODEL" and savings_rate(cost, all_costs) < 0.15:
-            continue
-
-        score = weighted_score(capability, cost_efficiency(cost, all_costs, features),
-                               quality, latency, weights)
-        scored.append((strategy, score, cost, quality))
-
-    best = max(scored, key=lambda x: x[1])
-
-    # ━━━ 第5层：管控门禁 ━━━
-    budget_status = check_budget(best.cost, constraints.soft_budget_limit, constraints.hard_budget_limit)
-    human_review = check_human_review(features, best, budget_status)
-    quality_gate = build_quality_gate(features)
-    fallback = build_fallback_policy(best, candidates)
+    # ━━━ 管控门禁 ━━━
+    budget_status = check_budget(best.cost, features)
+    requires_review, review_reason = gate.check_human_review(
+        GateInput(features, best.model_assignment.executor, best.strategy, best.cost, best.quality, budget_status)
+    )
+    quality_gate = gate.build_quality_gate(features, requires_review)
+    fallback = build_fallback_policy(strategy_scores)
 
     # ━━━ 输出 ━━━
-    decision = build_routing_decision(best, scored, budget_status,
-                                       human_review, quality_gate, fallback)
+    decision = build_routing_decision(best, strategy_scores, budget_status,
+                                       requires_review, review_reason, quality_gate, fallback)
 
     # 持久化审计记录
     db.save_routing_decision(decision)
@@ -1808,8 +1905,9 @@ airouter/
 ├── docs/                                # 文档
 │   ├── system-design.md                 # 系统设计文档（Week 1交付）
 │   ├── competitive-analysis.md          # 竞品调研
-│   ├── best-practices-manual.md         # Token优化最佳实践手册（9章）
-│   ├── sop.md                           # 企业Token管控SOP（5个SOP）
+│   ├── week1-delivery-checklist.md      # Week 1交付物对照表
+│   ├── best-practices.md                # Token优化最佳实践手册（9章）
+│   ├── sop/                             # 企业Token管控SOP（5个SOP）
 │   └── benchmark-report.md             # Benchmark结果报告
 │
 ├── src/airouter/                        # 源代码

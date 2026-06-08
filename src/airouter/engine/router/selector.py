@@ -1,9 +1,9 @@
-"""Selector：硬约束过滤 + 单模型评分。"""
+"""Selector：硬约束过滤 + 单模型评分 + 策略级评分。"""
 
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from airouter.config import (
     ModelEntry,
@@ -16,9 +16,24 @@ from airouter.models.enums import (
     ComplexityLevel,
     RiskLevel,
     SensitivityLevel,
+    StrategyType,
     TaskCategory,
 )
-from airouter.models.schemas import TaskFeatures
+from airouter.models.schemas import ModelAssignment, TaskFeatures
+
+# ── 执行级能力需求（executor 角色专用，不要求 architecture 等全局能力） ──
+EXECUTOR_CAPABILITY_REQUIREMENTS: dict[TaskCategory, set[str]] = {
+    TaskCategory.CODE_GENERATION: {"code_gen"},
+    TaskCategory.CODE_REVIEW: {"code_gen"},
+    TaskCategory.REFACTORING: {"code_gen"},
+    TaskCategory.BUG_ANALYSIS: {"code_gen"},
+    TaskCategory.DOCUMENTATION: {"documentation"},
+    TaskCategory.ARCHITECTURE: {"code_gen"},
+    TaskCategory.TEST_GENERATION: {"test_generation"},
+    TaskCategory.DATA_PROCESSING: {"data_processing"},
+    TaskCategory.DEVOPS: {"data_processing"},
+    TaskCategory.CONVERSATION: set(),
+}
 
 # ── 最低覆盖率阈值（按复杂度） ──────────────────────────────
 MIN_COVERAGE_BY_COMPLEXITY: dict[ComplexityLevel, float] = {
@@ -55,6 +70,22 @@ class CandidateScore:
     total_score: float
     budget_status: BudgetStatus = BudgetStatus.OK
     requires_approval: bool = False
+
+
+@dataclass
+class StrategyScore:
+    """策略级评分：Router/Gate 消费的对象。"""
+
+    strategy: StrategyType
+    model_assignment: ModelAssignment
+    models_list: list[ModelEntry] = field(default_factory=list)
+    capability: float = 0.0
+    cost: float = 0.0
+    quality: float = 0.0
+    latency: float = 0.0
+    total_score: float = 0.0
+    budget_status: BudgetStatus = BudgetStatus.OK
+    trigger_reasons: dict[str, str] = field(default_factory=dict)
 
 
 class ModelSelector:
@@ -154,6 +185,400 @@ class ModelSelector:
             return None
         scored = self.score_models(candidates, features)
         return scored[0] if scored else None
+
+    # ── 策略级方法 ────────────────────────────────────────────
+
+    def select_top_k_per_tier(
+        self, candidates: list[ModelEntry], features: TaskFeatures
+    ) -> dict[int, list[ModelEntry]]:
+        """按 top_k_by_tier 配置，每个 tier 取 pre_score 最高的 K 个。"""
+        # 按 tier 分组
+        by_tier: dict[int, list[ModelEntry]] = {}
+        for m in candidates:
+            by_tier.setdefault(m.tier, []).append(m)
+
+        result: dict[int, list[ModelEntry]] = {}
+        for tier_key in ("tier1", "tier2", "tier3"):
+            tier_num = int(tier_key[-1])
+            tier_models = by_tier.get(tier_num, [])
+            if not tier_models:
+                continue
+
+            top_k_cfg = self._routing_rules.top_k_by_tier.get(tier_key)
+            k = top_k_cfg.k if top_k_cfg else 2
+            pre_weights = top_k_cfg.pre_score if top_k_cfg else {
+                "capability": 0.40, "quality": 0.30, "cost": 0.30
+            }
+
+            # 计算 pre_score 并排序
+            scored = []
+            for m in tier_models:
+                cap = self._capability_score(m, features)
+                qual = self._quality_score(m, features)
+                cost = self._estimate_single_cost(m, features)
+                # cost 归一化：越小越好
+                cost_score = 1.0 / (1.0 + cost) if cost > 0 else 1.0
+                pre = (
+                    pre_weights.get("capability", 0) * cap
+                    + pre_weights.get("quality", 0) * qual
+                    + pre_weights.get("cost", 0) * cost_score
+                )
+                scored.append((pre, m))
+
+            scored.sort(key=lambda x: x[0], reverse=True)
+            result[tier_num] = [m for _, m in scored[:k]]
+
+        return result
+
+    def select_best_strategy(
+        self,
+        strategy_types: list[StrategyType],
+        all_models: list[ModelEntry],
+        features: TaskFeatures,
+        estimator,
+        classifier_reasons: dict[str, str] | None = None,
+    ) -> list[StrategyScore]:
+        """生成并评分所有策略候选，返回按 total_score 排序的列表。
+
+        包含 post-filter：quality_loss > 15% 排除，非 SINGLE 且 savings < 15% 排除。
+        savings baseline 使用 Tier 1 单模型成本（与 Router baseline 一致）。
+        """
+        # 基础过滤（上下文 + 敏感性，不过滤 tier）
+        base_candidates = self._filter_base(all_models, features)
+
+        # 按角色取模型池（含角色级能力过滤）
+        role_pool = self._build_role_pool(base_candidates, features)
+
+        # Top-K per tier（在每个角色池内做 Top-K）
+        for role in role_pool:
+            if role_pool[role]:
+                top_k = self.select_top_k_per_tier(role_pool[role], features)
+                role_pool[role] = [m for models in top_k.values() for m in models]
+
+        # Tier 1 baseline 成本（用于 savings 计算）
+        tier1_baseline = self._compute_tier1_baseline(all_models, features, estimator)
+
+        # 生成策略候选
+        candidates: list[StrategyScore] = []
+        for st in strategy_types:
+            scores = self._build_strategy_candidates(
+                st, role_pool, features, estimator, classifier_reasons or {}
+            )
+            candidates.extend(scores)
+
+        if not candidates:
+            return []
+
+        # Post-filter（硬性排除）
+        baseline_quality = max(c.quality for c in candidates)
+
+        filtered = []
+        for c in candidates:
+            # quality_loss > 15% → 排除
+            quality_loss = baseline_quality - c.quality
+            if quality_loss > 0.15:
+                continue
+            # 非 SINGLE 且 savings < 15% → 排除（使用 Tier 1 baseline）
+            if c.strategy != StrategyType.SINGLE_MODEL and tier1_baseline > 0:
+                savings = (tier1_baseline - c.cost) / tier1_baseline
+                if savings < 0.15:
+                    continue
+            filtered.append(c)
+
+        # 硬性过滤：如果全被排除，返回空列表（让 Router 走 escalate_to_human）
+        if not filtered:
+            return []
+
+        # 归一化成本并计算最终分数
+        min_cost = min(c.cost for c in filtered)
+        cost_sensitivity = self._get_cost_sensitivity(features.category)
+        weights = self._get_weights(features.category)
+
+        for c in filtered:
+            cost_score = self._normalize_cost(c.cost, min_cost, cost_sensitivity)
+            c.total_score = (
+                weights["capability"] * c.capability
+                + weights["cost"] * cost_score
+                + weights["quality"] * c.quality
+                + weights["latency"] * c.latency
+            )
+            # 预算标签
+            c.budget_status, _ = self._compute_budget_status(c.cost, features)
+
+        filtered.sort(key=lambda x: x.total_score, reverse=True)
+        return filtered
+
+    # ── 内部策略方法 ──────────────────────────────────────────
+
+    def _filter_base(
+        self, all_models: list[ModelEntry], features: TaskFeatures
+    ) -> list[ModelEntry]:
+        """基础过滤：只保留通用硬约束（上下文窗口 + 敏感性）。
+
+        能力过滤下沉到 _build_role_pool()，按角色做差异化。
+        """
+        result = []
+        for m in all_models:
+            if m.max_context_window < features.estimated_input_tokens:
+                continue
+            if features.sensitivity == SensitivityLevel.HIGH and not m.allow_sensitive_data:
+                continue
+            result.append(m)
+        return result
+
+    def _build_role_pool(
+        self, base_candidates: list[ModelEntry], features: TaskFeatures
+    ) -> dict[str, list[ModelEntry]]:
+        """按角色构建模型池，包含角色级能力过滤。
+
+        planner/reviewer/single：用任务级 _capability_score()
+        executor：用执行级能力（不要求 architecture 等全局能力）
+        """
+        allowed_tiers = self._get_allowed_tiers(features)
+        executor_tier = self._get_executor_tier(features.risk_level)
+
+        # 任务级能力过滤（planner/reviewer/single）
+        task_capable = [m for m in base_candidates if self._capability_score(m, features) > 0.0]
+
+        # 执行级能力过滤（executor）
+        executor_required = EXECUTOR_CAPABILITY_REQUIREMENTS.get(features.category, set())
+        if executor_required:
+            exec_capable = [m for m in base_candidates if executor_required.issubset(set(m.capabilities))]
+        else:
+            exec_capable = base_candidates
+
+        pool: dict[str, list[ModelEntry]] = {
+            "planner": [m for m in task_capable if m.tier == 1],
+            "reviewer": [m for m in task_capable if m.tier == 1],
+            "executor": [m for m in exec_capable if m.tier in executor_tier],
+            "single": [m for m in task_capable if m.tier in allowed_tiers],
+        }
+        return pool
+
+    def _get_executor_tier(self, risk_level: RiskLevel) -> list[int]:
+        """Plan-Execute 执行模型 tier 选择（设计文档 4.3.1）。"""
+        if risk_level == RiskLevel.LOW:
+            return [3]
+        return [2]  # MEDIUM 和 HIGH 都用 Tier 2
+
+    def _build_strategy_candidates(
+        self,
+        strategy: StrategyType,
+        pool: dict[str, list[ModelEntry]],
+        features: TaskFeatures,
+        estimator,
+        classifier_reasons: dict[str, str],
+    ) -> list[StrategyScore]:
+        """为一种策略类型生成候选评分。"""
+
+        if strategy == StrategyType.SINGLE_MODEL:
+            return self._build_single_model_candidates(pool, features, estimator, classifier_reasons)
+
+        if strategy == StrategyType.GUIDED_EXECUTE:
+            return self._build_guided_candidates(pool, features, estimator, classifier_reasons)
+
+        if strategy == StrategyType.PLAN_EXECUTE:
+            return self._build_plan_execute_candidates(pool, features, estimator, classifier_reasons)
+
+        if strategy == StrategyType.PLAN_EXECUTE_REVIEW:
+            return self._build_per_candidates(pool, features, estimator, classifier_reasons)
+
+        return []
+
+    def _build_single_model_candidates(
+        self, pool, features, estimator, classifier_reasons
+    ) -> list[StrategyScore]:
+        singles = pool["single"]
+        if not singles:
+            return []
+        scored = self.score_models(singles, features)
+        results = []
+        for cs in scored[:3]:  # 最多 3 个 SINGLE 候选
+            est = estimator.estimate(cs.model, features.estimated_input_tokens, features.estimated_output_tokens)
+            results.append(StrategyScore(
+                strategy=StrategyType.SINGLE_MODEL,
+                model_assignment=ModelAssignment(executor=cs.model.name),
+                models_list=[cs.model],
+                capability=cs.capability,
+                cost=est.total_cost,
+                quality=cs.quality,
+                latency=cs.latency,
+                total_score=cs.total_score,
+                budget_status=cs.budget_status,
+                trigger_reasons=classifier_reasons,
+            ))
+        return results
+
+    def _build_guided_candidates(
+        self, pool, features, estimator, classifier_reasons
+    ) -> list[StrategyScore]:
+        executors = [m for m in pool["executor"] if m.tier == 2]
+        reviewers = pool["reviewer"]
+        if not executors or not reviewers:
+            return []
+
+        # 遍历 Top-K 组合
+        results = []
+        for executor in executors:
+            for reviewer in reviewers:
+                est = estimator.estimate_strategy_cost(
+                    StrategyType.GUIDED_EXECUTE,
+                    ModelAssignment(executor=executor.name, reviewer=reviewer.name),
+                    features,
+                    self._make_simple_registry(executor, reviewer),
+                )
+
+                executor_q = self._quality_score(executor, features)
+                reviewer_q = self._quality_score(reviewer, features)
+                quality = self._strategy_quality(StrategyType.GUIDED_EXECUTE, 0.0, executor_q, reviewer_q, 0)
+                cap = self._capability_score(executor, features)
+                lat = self._latency_score(executor)
+
+                results.append(StrategyScore(
+                    strategy=StrategyType.GUIDED_EXECUTE,
+                    model_assignment=ModelAssignment(executor=executor.name, reviewer=reviewer.name),
+                    models_list=[executor, reviewer],
+                    capability=cap,
+                    cost=est.total_cost,
+                    quality=quality,
+                    latency=lat,
+                    trigger_reasons=classifier_reasons,
+                ))
+        return results
+
+    def _build_plan_execute_candidates(
+        self, pool, features, estimator, classifier_reasons
+    ) -> list[StrategyScore]:
+        planners = pool["planner"]
+        executors = pool["executor"]
+        if not planners or not executors:
+            return []
+
+        # 遍历 Top-K 组合
+        results = []
+        for planner in planners:
+            for executor in executors:
+                cost = estimator.estimate_plan_execute_cost(planner, executor, features)
+
+                planner_q = self._quality_score(planner, features)
+                executor_q = self._executor_quality_score(executor, features)
+                quality = self._strategy_quality(
+                    StrategyType.PLAN_EXECUTE, planner_q, executor_q, 0.0, len(features.subtasks)
+                )
+                cap = min(self._capability_score(planner, features), self._executor_capability(executor, features))
+                lat = self._latency_score(executor)
+
+                results.append(StrategyScore(
+                    strategy=StrategyType.PLAN_EXECUTE,
+                    model_assignment=ModelAssignment(planner=planner.name, executor=executor.name),
+                    models_list=[planner, executor],
+                    capability=cap,
+                    cost=cost,
+                    quality=quality,
+                    latency=lat,
+                    trigger_reasons=classifier_reasons,
+                ))
+        return results
+
+    def _build_per_candidates(
+        self, pool, features, estimator, classifier_reasons
+    ) -> list[StrategyScore]:
+        planners = pool["planner"]
+        executors = pool["executor"]
+        reviewers = pool["reviewer"]
+        if not planners or not executors or not reviewers:
+            return []
+
+        # 遍历 Top-K 组合
+        results = []
+        for planner in planners:
+            for executor in executors:
+                for reviewer in reviewers:
+                    pe_cost = estimator.estimate_plan_execute_cost(planner, executor, features)
+                    review_cost = estimator.estimate_review_cost(reviewer, features)
+                    total_cost = pe_cost + review_cost
+
+                    planner_q = self._quality_score(planner, features)
+                    executor_q = self._executor_quality_score(executor, features)
+                    reviewer_q = self._quality_score(reviewer, features)
+                    quality = self._strategy_quality(
+                        StrategyType.PLAN_EXECUTE_REVIEW, planner_q, executor_q, reviewer_q, len(features.subtasks)
+                    )
+                    cap = min(self._capability_score(planner, features), self._executor_capability(executor, features))
+                    lat = self._latency_score(executor)
+
+                    results.append(StrategyScore(
+                        strategy=StrategyType.PLAN_EXECUTE_REVIEW,
+                        model_assignment=ModelAssignment(
+                            planner=planner.name, executor=executor.name, reviewer=reviewer.name
+                        ),
+                        models_list=[planner, executor, reviewer],
+                        capability=cap,
+                        cost=total_cost,
+                        quality=quality,
+                        latency=lat,
+                        trigger_reasons=classifier_reasons,
+                    ))
+        return results
+
+    def _compute_tier1_baseline(
+        self, all_models: list[ModelEntry], features: TaskFeatures, estimator
+    ) -> float:
+        """Tier 1 单模型成本基线（与 Router._calculate_baseline 一致）。"""
+        tier1 = [m for m in all_models if m.tier == 1]
+        if not tier1:
+            return 0.0
+        max_cost = 0.0
+        for m in tier1:
+            est = estimator.estimate(m, features.estimated_input_tokens, features.estimated_output_tokens)
+            max_cost = max(max_cost, est.total_cost)
+        return max_cost
+
+    def _executor_quality_score(self, model: ModelEntry, features: TaskFeatures) -> float:
+        """Executor 角色质量得分（与 _quality_score 相同，但语义明确）。"""
+        return self._quality_score(model, features)
+
+    def _executor_capability(self, model: ModelEntry, features: TaskFeatures) -> float:
+        """Executor 角色能力得分：使用 executor 级能力需求而非全局需求。"""
+        executor_required = EXECUTOR_CAPABILITY_REQUIREMENTS.get(features.category, set())
+        if not executor_required:
+            return 1.0
+        model_caps = set(model.capabilities)
+        matched = executor_required & model_caps
+        return len(matched) / len(executor_required) if executor_required else 1.0
+
+    def _strategy_quality(
+        self,
+        strategy: StrategyType,
+        planner_q: float,
+        executor_q: float,
+        reviewer_q: float,
+        num_subtasks: int,
+    ) -> float:
+        """策略质量 = 加权组合 - decomposition_penalty。"""
+        weights = self._routing_rules.strategy_quality_weights.get(strategy.value, {})
+        if not weights:
+            # SINGLE_MODEL fallback
+            return executor_q
+
+        decomposition_penalty = min(0.10, 0.02 * max(0, num_subtasks - 1))
+
+        quality = (
+            weights.get("plan", 0.0) * planner_q
+            + weights.get("execute", 0.0) * executor_q
+            + weights.get("review", 0.0) * reviewer_q
+            - decomposition_penalty
+        )
+        return float(max(0.0, quality))
+
+    def _make_simple_registry(self, *models: ModelEntry):
+        """创建测试用的简单 registry（从模型列表）。"""
+        class _SimpleRegistry:
+            def __init__(self, models):
+                self._models = {m.name: m for m in models}
+            def get_by_name(self, name):
+                return self._models.get(name)
+        return _SimpleRegistry(models)
 
     def _capability_score(self, model: ModelEntry, features: TaskFeatures) -> float:
         """计算模型对任务的能力覆盖率。"""

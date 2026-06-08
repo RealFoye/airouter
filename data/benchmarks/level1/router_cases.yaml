@@ -1,0 +1,420 @@
+version: "1.0"
+description: "Level 1 offline rule benchmark cases"
+
+cases:
+  # ── 1. 简单任务省钱路径（6 条） ──────────────────────────────
+  - id: "L1-SIMPLE-001"
+    prompt: "写一个Python函数检查回文"
+    expected_task_type: "CODE_GENERATION"
+    expected_complexity: "SIMPLE"
+    expected_risk: "LOW"
+    expected_strategy: "SINGLE_MODEL"
+    expected_executor_tier: 3
+    expected_requires_human_review: false
+    tags: ["simple", "codegen"]
+    notes: "SIMPLE + LOW → Tier 3, SINGLE_MODEL, 不审批"
+
+  - id: "L1-SIMPLE-002"
+    prompt: "什么是闭包？解释一下Python中闭包的概念"
+    expected_task_type: "CONVERSATION"
+    expected_complexity: "SIMPLE"
+    expected_risk: "LOW"
+    expected_strategy: "SINGLE_MODEL"
+    expected_executor_tier: 3
+    expected_requires_human_review: false
+    tags: ["simple", "conversation"]
+    notes: "CONVERSATION + SIMPLE + LOW → Tier 3"
+
+  - id: "L1-SIMPLE-003"
+    prompt: "写一个CSV解析脚本处理数据"
+    expected_task_type: "DATA_PROCESSING"
+    expected_complexity: "SIMPLE"
+    expected_risk: "LOW"
+    expected_strategy: "SINGLE_MODEL"
+    expected_executor_tier: 3
+    expected_requires_human_review: false
+    tags: ["simple", "data"]
+    notes: "DATA_PROCESSING + SIMPLE + LOW → Tier 3"
+
+  - id: "L1-SIMPLE-004"
+    prompt: "给add函数写一个单元测试"
+    expected_task_type: "TEST_GENERATION"
+    expected_complexity: "SIMPLE"
+    expected_risk: "LOW"
+    expected_strategy: "SINGLE_MODEL"
+    expected_executor_tier: 3
+    expected_requires_human_review: false
+    tags: ["simple", "test"]
+    notes: "TEST_GENERATION + SIMPLE + LOW → Tier 3"
+
+  - id: "L1-SIMPLE-005"
+    prompt: "给这个项目写一个README文档"
+    expected_task_type: "DOCUMENTATION"
+    expected_complexity: "SIMPLE"
+    expected_risk: "LOW"
+    expected_strategy: "SINGLE_MODEL"
+    expected_executor_tier: 3
+    expected_requires_human_review: false
+    tags: ["simple", "docs"]
+    notes: "DOCUMENTATION + SIMPLE + LOW → Tier 3"
+
+  - id: "L1-SIMPLE-006"
+    prompt: "写一个简单的Docker配置文件"
+    expected_task_type: "DEVOPS"
+    expected_complexity: "SIMPLE"
+    expected_risk: "LOW"
+    expected_strategy: "SINGLE_MODEL"
+    expected_executor_tier: 3
+    expected_requires_human_review: false
+    tags: ["simple", "devops"]
+    notes: "DEVOPS + SIMPLE + LOW → Tier 3"
+
+  # ── 2. 中等任务（6 条） ──────────────────────────────────────
+  - id: "L1-MODERATE-001"
+    prompt: "实现多个相关的工具函数模块"
+    expected_task_type: "CODE_GENERATION"
+    expected_complexity: "MODERATE"
+    expected_risk: "LOW"
+    expected_strategy: "SINGLE_MODEL"
+    tags: ["moderate", "codegen"]
+    notes: "MODERATE + LOW → allowed_tiers [2,3]"
+
+  - id: "L1-MODERATE-002"
+    prompt: "审查几个相关模块的代码质量"
+    expected_task_type: "CODE_REVIEW"
+    expected_complexity: "MODERATE"
+    expected_risk: "MEDIUM"
+    expected_strategy: "SINGLE_MODEL"
+    tags: ["moderate", "review"]
+    notes: "CODE_REVIEW + MODERATE + MEDIUM"
+
+  - id: "L1-MODERATE-003"
+    prompt: "重构几个相关模块的代码结构"
+    expected_task_type: "REFACTORING"
+    expected_complexity: "MODERATE"
+    expected_risk: "MEDIUM"
+    expected_strategy: "SINGLE_MODEL"
+    tags: ["moderate", "refactor"]
+    notes: "REFACTORING + MODERATE + MEDIUM"
+
+  - id: "L1-MODERATE-004"
+    prompt: "修改几个模块中的报错异常问题"
+    expected_task_type: "BUG_ANALYSIS"
+    expected_complexity: "MODERATE"
+    expected_risk: "MEDIUM"
+    expected_strategy: "SINGLE_MODEL"
+    tags: ["moderate", "bug"]
+    notes: "BUG_ANALYSIS + MODERATE + MEDIUM (修改=MEDIUM risk)"
+
+  - id: "L1-MODERATE-005"
+    prompt: "配置Docker Compose部署多个服务"
+    expected_task_type: "DEVOPS"
+    expected_complexity: "MODERATE"
+    expected_risk: "LOW"
+    expected_strategy: "SINGLE_MODEL"
+    tags: ["moderate", "devops"]
+    notes: "DEVOPS + MODERATE + LOW"
+
+  - id: "L1-MODERATE-006"
+    prompt: "批量处理CSV数据文件"
+    expected_task_type: "DATA_PROCESSING"
+    expected_complexity: "SIMPLE"
+    expected_risk: "LOW"
+    expected_strategy: "SINGLE_MODEL"
+    tags: ["moderate", "data"]
+    notes: "DATA_PROCESSING + SIMPLE + LOW (CSV+批量=5)"
+
+  # ── 3. 复杂/专家任务（6 条） ─────────────────────────────────
+  - id: "L1-COMPLEX-001"
+    prompt: "设计百万级并发的分布式微服务架构以及消息队列系统"
+    expected_task_type: "ARCHITECTURE"
+    expected_complexity: "EXPERT"
+    expected_risk: "HIGH"
+    expected_strategy: "SINGLE_MODEL"
+    expected_executor_tier: 1
+    expected_requires_human_review: true
+    expected_quality_gate_contains: ["human_review"]
+    tags: ["expert", "architecture"]
+    notes: "EXPERT ARCHITECTURE → Tier 1, forced review (SINGLE_MODEL wins over PE/PER in scoring)"
+
+  - id: "L1-COMPLEX-002"
+    prompt: "实现跨模块的鉴权中间件"
+    expected_task_type: "CODE_GENERATION"
+    expected_complexity: "COMPLEX"
+    expected_risk: "HIGH"
+    expected_strategy: "SINGLE_MODEL"
+    expected_requires_human_review: true
+    tags: ["complex", "codegen", "high-risk"]
+    notes: "COMPLEX + HIGH risk → SINGLE_MODEL, review (removed 高并发 to avoid ARCHITECTURE)"
+
+  - id: "L1-COMPLEX-003"
+    prompt: "重构跨模块的分布式系统核心代码并且解耦多个服务"
+    expected_task_type: "REFACTORING"
+    expected_complexity: "COMPLEX"
+    expected_risk: "HIGH"
+    expected_strategy: "GUIDED_EXECUTE"
+    expected_requires_human_review: true
+    tags: ["complex", "refactor", "high-risk"]
+    notes: "COMPLEX REFACTORING + HIGH → GUIDED_EXECUTE wins scoring"
+
+  - id: "L1-COMPLEX-004"
+    prompt: "调试分布式系统中的死锁问题以及内存泄漏并且分析堆栈"
+    expected_task_type: "BUG_ANALYSIS"
+    expected_complexity: "COMPLEX"
+    expected_risk: "HIGH"
+    expected_strategy: "SINGLE_MODEL"
+    expected_requires_human_review: false
+    tags: ["complex", "bug", "high-risk"]
+    notes: "COMPLEX BUG_ANALYSIS + HIGH → SINGLE_MODEL+Tier1, no Gate condition 2 (no degradation)"
+
+  - id: "L1-COMPLEX-005"
+    prompt: "设计百万级用户的系统级全局权限管理架构"
+    expected_task_type: "ARCHITECTURE"
+    expected_complexity: "EXPERT"
+    expected_risk: "HIGH"
+    expected_strategy: "SINGLE_MODEL"
+    expected_executor_tier: 1
+    expected_requires_human_review: true
+    expected_quality_gate_contains: ["human_review"]
+    tags: ["expert", "architecture"]
+    notes: "EXPERT ARCHITECTURE → Tier 1, forced review"
+
+  - id: "L1-COMPLEX-006"
+    prompt: "开发跨模块的安全模块实现MFA鉴权和OAuth集成"
+    expected_task_type: "CODE_GENERATION"
+    expected_complexity: "COMPLEX"
+    expected_risk: "HIGH"
+    expected_strategy: "SINGLE_MODEL"
+    expected_requires_human_review: true
+    tags: ["complex", "codegen", "high-risk"]
+    notes: "COMPLEX + HIGH → SINGLE_MODEL, requires review"
+
+  # ── 4. 高风险任务（5 条） ────────────────────────────────────
+  - id: "L1-RISK-001"
+    prompt: "实现JWT鉴权模块"
+    expected_task_type: "CODE_GENERATION"
+    expected_complexity: "COMPLEX"
+    expected_risk: "HIGH"
+    expected_strategy: "SINGLE_MODEL"
+    expected_requires_human_review: true
+    tags: ["high-risk", "auth"]
+    notes: "HIGH risk + 鉴权 → requires review"
+
+  - id: "L1-RISK-002"
+    prompt: "开发支付逻辑处理财务数据"
+    expected_task_type: "CODE_GENERATION"
+    expected_complexity: "SIMPLE"
+    expected_risk: "HIGH"
+    expected_strategy: "SINGLE_MODEL"
+    expected_requires_human_review: true
+    tags: ["high-risk", "payment"]
+    notes: "支付 + 财务 → HIGH risk"
+
+  - id: "L1-RISK-003"
+    prompt: "运维部署生产环境数据库迁移配置"
+    expected_task_type: "DEVOPS"
+    expected_complexity: "MODERATE"
+    expected_risk: "HIGH"
+    expected_strategy: "SINGLE_MODEL"
+    expected_requires_human_review: true
+    tags: ["high-risk", "devops"]
+    notes: "运维+部署→DEVOPS, 生产+迁移→HIGH risk"
+
+  - id: "L1-RISK-004"
+    prompt: "运维删除线上生产数据的核心配置表"
+    expected_task_type: "DEVOPS"
+    expected_complexity: "SIMPLE"
+    expected_risk: "HIGH"
+    expected_strategy: "SINGLE_MODEL"
+    expected_requires_human_review: true
+    tags: ["high-risk", "devops"]
+    notes: "运维→DEVOPS, 删除+生产+核心→HIGH risk"
+
+  - id: "L1-RISK-005"
+    prompt: "实现权限管理系统的安全模块"
+    expected_task_type: "CODE_GENERATION"
+    expected_complexity: "COMPLEX"
+    expected_risk: "HIGH"
+    expected_strategy: "SINGLE_MODEL"
+    expected_requires_human_review: true
+    tags: ["high-risk", "auth"]
+    notes: "权限 + 安全 → HIGH risk"
+
+  # ── 5. PE 候选测试（5 条） ─────────────────────────────────
+  # 注：当前 Selector 评分中 SINGLE_MODEL 通常优于 PE/PER（因 Tier 1 质量相同但 PE 有额外成本）
+  # 这些 case 验证 PE 的结构条件判断逻辑，而非 PE 策略最终胜出
+  - id: "L1-PE-001"
+    prompt: "实现跨模块的鉴权中间件"
+    expected_task_type: "CODE_GENERATION"
+    expected_complexity: "COMPLEX"
+    expected_risk: "HIGH"
+    expected_strategy: "SINGLE_MODEL"
+    expected_requires_human_review: true
+    tags: ["pe-candidate", "complex"]
+    notes: "COMPLEX + HIGH + subtasks → PE eligible, SINGLE_MODEL wins scoring"
+
+  - id: "L1-PE-002"
+    prompt: "设计百万并发微服务系统架构"
+    expected_task_type: "ARCHITECTURE"
+    expected_complexity: "EXPERT"
+    expected_risk: "HIGH"
+    expected_strategy: "SINGLE_MODEL"
+    expected_executor_tier: 1
+    expected_requires_human_review: true
+    expected_quality_gate_contains: ["human_review"]
+    tags: ["per-candidate", "expert", "architecture"]
+    notes: "EXPERT ARCHITECTURE → PER eligible, SINGLE_MODEL wins scoring, forced review"
+
+  - id: "L1-PE-003"
+    prompt: "调试分布式系统中的死锁问题以及内存泄漏"
+    expected_task_type: "BUG_ANALYSIS"
+    expected_complexity: "COMPLEX"
+    expected_risk: "HIGH"
+    expected_strategy: "SINGLE_MODEL"
+    expected_requires_human_review: false
+    tags: ["pe-candidate", "complex", "bug"]
+    notes: "COMPLEX BUG_ANALYSIS + HIGH → PE eligible, SINGLE_MODEL wins"
+
+  - id: "L1-PE-004"
+    prompt: "写一个Python函数计算斐波那契数列"
+    expected_task_type: "CODE_GENERATION"
+    expected_complexity: "SIMPLE"
+    expected_risk: "LOW"
+    expected_strategy: "SINGLE_MODEL"
+    tags: ["negative", "simple"]
+    notes: "SIMPLE → 不应触发 PE，SINGLE_MODEL"
+
+  - id: "L1-PE-005"
+    prompt: "重构跨模块的分布式系统以及解耦多个服务并且优化性能"
+    expected_task_type: "REFACTORING"
+    expected_complexity: "COMPLEX"
+    expected_risk: "HIGH"
+    expected_strategy: "GUIDED_EXECUTE"
+    expected_requires_human_review: true
+    tags: ["pe-candidate", "complex", "refactor"]
+    notes: "COMPLEX REFACTORING + HIGH → GUIDED_EXECUTE wins scoring"
+
+  # ── 6. Gate 规则（5 条） ─────────────────────────────────────
+  - id: "L1-GATE-001"
+    prompt: "数据清洗包含密码和密钥的CSV文件"
+    expected_task_type: "DATA_PROCESSING"
+    expected_complexity: "MODERATE"
+    expected_risk: "LOW"
+    expected_strategy: "SINGLE_MODEL"
+    expected_requires_human_review: true
+    expected_quality_gate_contains: ["human_review"]
+    tags: ["gate", "sensitivity"]
+    notes: "数据清洗+CSV→DATA_PROCESSING, 密码+密钥→sensitivity=HIGH → Gate condition 1"
+
+  - id: "L1-GATE-002"
+    prompt: "设计百万并发微服务系统架构"
+    expected_task_type: "ARCHITECTURE"
+    expected_complexity: "EXPERT"
+    expected_risk: "HIGH"
+    expected_strategy: "SINGLE_MODEL"
+    expected_executor_tier: 1
+    expected_requires_human_review: true
+    expected_quality_gate_contains: ["human_review"]
+    tags: ["gate", "architecture"]
+    notes: "ARCHITECTURE → forced review (human_review_required_tasks)"
+
+  - id: "L1-GATE-003"
+    prompt: "审查生产环境相关的权限配置模块"
+    expected_task_type: "CODE_REVIEW"
+    expected_complexity: "MODERATE"
+    expected_risk: "HIGH"
+    expected_strategy: "SINGLE_MODEL"
+    expected_requires_human_review: true
+    expected_quality_gate_contains: ["human_review"]
+    tags: ["gate", "high-risk"]
+    notes: "审查→CODE_REVIEW, 相关→MODERATE, 权限+生产→HIGH risk+sensitivity"
+
+  - id: "L1-GATE-004"
+    prompt: "写一个简单的问候函数"
+    expected_task_type: "CODE_GENERATION"
+    expected_complexity: "SIMPLE"
+    expected_risk: "LOW"
+    expected_strategy: "SINGLE_MODEL"
+    expected_requires_human_review: false
+    expected_executor_tier: 3
+    tags: ["gate", "simple"]
+    notes: "SIMPLE + LOW + sensitivity LOW + not forced → no review"
+
+  - id: "L1-GATE-005"
+    prompt: "实现包含token和密钥的安全鉴权模块"
+    expected_task_type: "CODE_GENERATION"
+    expected_complexity: "COMPLEX"
+    expected_risk: "HIGH"
+    expected_strategy: "SINGLE_MODEL"
+    expected_requires_human_review: true
+    expected_quality_gate_contains: ["human_review"]
+    tags: ["gate", "high-risk", "sensitivity"]
+    notes: "HIGH risk + sensitivity HIGH → multiple gate conditions"
+
+  # ── 7. Context/token（3 条） ─────────────────────────────────
+  - id: "L1-CTX-001"
+    prompt: "审查整个项目的所有文件的代码质量"
+    expected_task_type: "CODE_REVIEW"
+    expected_complexity: "MODERATE"
+    expected_risk: "MEDIUM"
+    expected_strategy: "SINGLE_MODEL"
+    tags: ["context", "heavy"]
+    notes: "整个项目 → HEAVY context"
+
+  - id: "L1-CTX-002"
+    prompt: "什么是闭包"
+    expected_task_type: "CONVERSATION"
+    expected_complexity: "SIMPLE"
+    expected_risk: "LOW"
+    expected_strategy: "SINGLE_MODEL"
+    tags: ["context", "minimal"]
+    notes: "MINIMAL context, short prompt"
+
+  - id: "L1-CTX-003"
+    prompt: "审查整个项目所有相关文件的安全漏洞"
+    expected_task_type: "CODE_REVIEW"
+    expected_complexity: "MODERATE"
+    expected_risk: "HIGH"
+    expected_strategy: "SINGLE_MODEL"
+    tags: ["context", "heavy"]
+    notes: "HEAVY context: 整个项目+相关文件, 安全→HIGH risk"
+
+  # ── 8. 预算/成本（4 条） ─────────────────────────────────────
+  - id: "L1-BUDGET-001"
+    prompt: "写一个简单的问候函数"
+    expected_task_type: "CODE_GENERATION"
+    expected_complexity: "SIMPLE"
+    expected_risk: "LOW"
+    expected_strategy: "SINGLE_MODEL"
+    expected_executor_tier: 3
+    expected_budget_status: "OK"
+    tags: ["budget", "simple"]
+    notes: "SIMPLE cost < 0.15 → OK"
+
+  - id: "L1-BUDGET-002"
+    prompt: "实现几个相关的工具函数模块"
+    expected_task_type: "CODE_GENERATION"
+    expected_complexity: "MODERATE"
+    expected_risk: "LOW"
+    expected_strategy: "SINGLE_MODEL"
+    expected_budget_status: "OK"
+    tags: ["budget", "moderate"]
+    notes: "MODERATE cost < 0.90 → OK"
+
+  - id: "L1-BUDGET-003"
+    prompt: "写一个计算加法的函数"
+    expected_task_type: "CODE_GENERATION"
+    expected_complexity: "SIMPLE"
+    expected_risk: "LOW"
+    expected_strategy: "SINGLE_MODEL"
+    tags: ["budget", "cost-positive"]
+    notes: "cost > 0 and not NaN"
+
+  - id: "L1-BUDGET-004"
+    prompt: "什么是Python之禅"
+    expected_task_type: "CONVERSATION"
+    expected_complexity: "SIMPLE"
+    expected_risk: "LOW"
+    expected_strategy: "SINGLE_MODEL"
+    tags: ["budget", "conversation"]
+    notes: "CONVERSATION SIMPLE → minimal cost, still > 0"

@@ -45,7 +45,22 @@
 - `docs/system-design.md` 是系统设计的唯一权威
 - `docs/development-plan.md` 是开发任务清单
 - `docs/CHANGELOG-design.md` 是设计变更历史
+- `docs/pitfalls.md` 是踩坑记录和工程教训
 - 如果发现代码和设计不一致，以设计文档为准，先对齐再写
+
+### 代码改完，文档跟着改
+
+每次完成一个模块或修复一轮 review 后，必须同步更新对应文档：
+
+| 改了什么 | 更新哪个文档 | 更新什么 |
+|----------|-------------|---------|
+| 架构/算法/策略逻辑变了 | `docs/system-design.md` | 对应章节的伪代码、触发条件、流程图 |
+| 设计决策（为什么改、改了什么） | `docs/CHANGELOG-design.md` | summary table 加一行 + detailed record |
+| 模块完成/Phase 收口 | `docs/development-plan.md` | 标记状态（✅ + 日期）、测试数、实际产出 |
+| 踩了坑/发现设计陷阱 | `docs/pitfalls.md` | 新坑条目（现象→根因→修复→教训） |
+| Schema/接口签名变了 | `docs/system-design.md` 对应章节 | 字段定义、参数说明 |
+
+**不要攒到最后统一补文档。** 一个 phase 做完就花 10 分钟同步，比 Week 4 回忆"我当时改了什么"靠谱得多。
 
 ## 技术栈
 

@@ -70,6 +70,27 @@
 | 60 | 管控门禁 | soft budget 不再触发人工审核，仅 warning | 语义修正 |
 | 61 | 管控门禁 | quality_loss 审核加 risk_level != LOW 前置条件 | 语义修正 |
 | 62 | 设计原则 | cost baseline 和 quality baseline 故意不对称 | 澄清 |
+| 63 | 策略选择 | StrategyClassifier 与 Selector 职责分离 | 架构重构 |
+| 64 | 能力匹配 | 角色级能力过滤（executor 不要求 architecture） | 细化 |
+| 65 | 策略选择 | Top-K 在角色池内执行，遍历组合替代 max() | 细化 |
+| 66 | Schema | AlternativeStrategy 支持 planner/executor/reviewer 多角色 | 扩展 |
+| 67 | 数据存储 | SQLite 外键强制 + ORM/Pydantic 命名对齐 | 修正 |
+| 68 | 审计引擎 | Collector/Aggregator/Detector/Attribution 四层架构 + 5 类浪费模式 | 新增 |
+| 69 | 审计引擎 | 种子数据参数化 + 浪费模式注入 | 新增 |
+| 70 | 审计引擎 | CLI audit 命令（Rich 格式 + JSON 输出） | 新增 |
+| 71 | 审计引擎 | P4 可降级逻辑修正（min → max）+ P5 缓存检测修正 + JSON 结构化输出 | 修正 |
+| 72 | 审计引擎 | 种子数据从 load_models() 派生价格/tier/cache + P2/P5 时间戳有界 + 集成测试自包含 | 修正 |
+| 73 | 审计引擎 | 种子数据 execution_feedback.created_at 有界化 + 不早于 routing_decisions | 修正 |
+| 74 | 上下文工程 | B-1 优先级框架 + B-2 压缩引擎（6 层优先级 + 6 种摘要规则 + risk_level 绑定策略） | 新增 |
+| 75 | 上下文工程 | ContextBlock 自动 protected + token_count + strategy 大小写归一化 + NONE 仍做冗余剔除 | 细化 |
+| 76 | 上下文工程 | Review 修复：AssemblyResult dataclass + NONE 预算裁剪 + 对话关键词大小写 + AGGRESSIVE 首末行 | 修正 |
+| 77 | 优化引擎 | Phase 7续 optimize CLI：5 类优化建议（缓存/压缩/降级/裁剪/分层）+ 3 策略对比 | 新增 |
+| 78 | 压缩引擎 | strategy_override 参数：支持强制指定压缩策略用于 3 策略对比展示 | 新增 |
+| 79 | 优化引擎 | Review 修复：治理语义约束（降级/分层过滤、escalate 检测、互斥节省） | 修正 |
+| 80 | 优化引擎 | Review 二轮修复：Gate 审批语义全量消费 + Engine 模型校验 + CLI Literal 校验 | 修正 |
+| 81 | 优化引擎 | Review 三轮修复：requires_approval 按建议后方案重新判断 + 汇总逻辑抽取 + Engine 参数校验 | 修正 |
+| 82 | 优化引擎 | Review 四轮修复：审批提示浮到 CLI 顶层 + budget_status 用真实计算 + Rich 表审批标签 | 修正 |
+| 83 | Benchmark | Level 1 离线规则 Benchmark：40 条 YAML case + 6 指标 + CLI + 零 API 成本 | 新增 |
 
 ---
 
@@ -1181,15 +1202,323 @@ Week 1 第二轮审查发现 quality_loss 公式错误，并确立了 cost/quali
 - 原因：两个问题本来就不是同一个问题。如果统一用 Tier 1 做 baseline，SIMPLE 任务会被误报 quality_loss（Tier 1 不在可选范围内）。如果统一用候选集，cost savings 永远是 0（没有对比）。
 - 改了之后好在哪：未来维护者不会试图"统一 baseline 让代码更干净"而破坏语义。详见 `pitfalls.md` 坑 7。
 
+**#63 StrategyClassifier 与 Selector 职责分离**
+- 原来：设计文档将"触发条件判断"和"候选生成"放在一起，成本/质量阈值写在触发条件里（条件6/7）
+- 改为：独立 `StrategyClassifier` 模块只做结构条件判断（5 个 Plan-Execute 条件、4 个 Guided 条件、PER = base_decomposable AND review_need），成本节省率和质量损失率下沉到 Selector 的 post-filter 阶段
+- 原因：结构条件是"这个任务有没有资格用这个策略"，成本/质量是"这个策略组合值不值得用"。分离后 Classifier 可以独立测试，不需要 mock estimator
+- 改了之后好在哪：Classifier 34 个测试全确定性，不依赖模型成本数据。Selector post-filter 用 Tier 1 baseline 做统一口径
+
+**#64 角色级能力过滤（executor 不要求 architecture）**
+- 原来：所有角色（planner/executor/reviewer）共用同一套任务级能力过滤
+- 改为：executor 使用 `EXECUTOR_CAPABILITY_REQUIREMENTS`（按 TaskCategory 映射，如 CODE_GENERATION 只要求 code_gen），planner/reviewer/single 继续用全局 `_capability_score()`
+- 原因：ARCHITECTURE 类任务要求 `architecture` 能力，但 executor 只负责执行代码片段，不需要架构能力。共用全局过滤会误杀 Tier 2/3 executor
+- 改了之后好在哪：ARCHITECTURE + EXPERT + HIGH risk 的 PER 策略能正确生成 raw 候选（角色级能力过滤不再误杀）；最终是否推荐仍取决于 post-filter 的成本/质量门槛
+
+**#65 Top-K 在角色池内执行，遍历组合替代 max()**
+- 原来：策略候选生成用 `max()` 取每个角色池的最优模型，只生成一个组合
+- 改为：在每个角色池内做 `select_top_k_per_tier()`，然后遍历 planner × executor × reviewer 所有 Top-K 组合
+- 原因：单模型最优不等于组合最优。planner 能力最强的 + executor 成本最低的 可能比 两者都中等的 总评分更高
+- 改了之后好在哪：候选集更丰富，post-filter 有更多选择余地
+
+**#66 AlternativeStrategy schema 支持多角色**
+- 原来：`AlternativeStrategy` 只有 `model: Optional[str]` 字段
+- 改为：`planner`, `executor`, `reviewer` 三个 Optional[str] 字段
+- 原因：PER/PE/GE 策略有多个角色模型，单字段无法表达
+- 改了之后好在哪：CLI 和 Web 可以展示"规划: qwen-max, 执行: qwen-plus, 审查: qwen-max"
+
+**#67 SQLite 外键强制 + ORM/Pydantic 命名对齐**
+- 原来：SQLite 默认 `PRAGMA foreign_keys=OFF`，FK 声明只是 metadata；ORM 字段名与 Pydantic schema 有两处不一致（`latency_ms` vs `actual_latency_ms`，`models_hash` vs `models_config_hash`）
+- 改为：`init_db()` 中加 `PRAGMA foreign_keys=ON`；FK 加 `ondelete="CASCADE"`；Pydantic 字段名向 DB schema 对齐（设计文档 §10 是真理来源）
+- 原因：FK 不 enforce 等于形同虚设，`routing_decision_id=999` 可以写入；命名不一致在 audit/benchmark 阶段会需要特殊映射
+- 改了之后好在哪：DB 级参照完整性 + ORM/Pydantic 一套命名，后续 audit Collector 和 benchmark runner 不需要 mapper
+
+**#68 审计引擎：Collector/Aggregator/Detector/Attribution 四层架构**
+- 原来：设计文档 §4.8 定义了审计引擎的 5 类浪费模式（P1-P5），但没有具体实现架构
+- 改为：四层架构：
+  - **Collector**：从 routing_decisions + execution_feedback 聚合消费记录，COALESCE(actual, estimated) 确保有真实数据用真实、没有用预估
+  - **Aggregator**：多维分组（user/project/model/task_type/department/day/client_type），返回 CostBreakdown 列表
+  - **Detector**：5 类浪费模式检测（P1 高配滥用/P2 重复调用/P3 过长上下文/P4 可降级未降级/P5 缓存机会未利用），每类有独立的严重度分级和节省估算
+  - **Attribution**：消费归因分析（汇总+多维分解+重度用户识别+Top N 浪费模式）
+- 关键设计：
+  - P1 触发条件：SIMPLE 用 Tier 1，或 MODERATE 用 Tier 1 但 risk != HIGH
+  - P2 时间窗口：10 分钟内相同 (user_id, project_id, task_hash)
+  - P3 阈值：max(10000, task_type_median * 2)
+  - P4 基于 routing_rules.allowed_tiers 推导最低可用 tier
+  - P5 需要模型 supports_prompt_caching=true + input > cache_min_prefix_tokens
+- 原因：企业级 Token 管控的核心是"谁花了多少钱、哪里浪费了、怎么省"
+- 改了之后好在哪：CLI 和 Web 可以复用同一套审计逻辑，答辩时展示浪费模式检测+节省建议非常有说服力
+
+**#69 种子数据：参数化 + 浪费模式注入**
+- 原来：设计文档提到需要种子数据，但没有具体方案
+- 改为：参数化生成器 `scripts/generate_seed_data.py`：
+  - 支持 `--days N --rows-per-day N` 或 `--rows N` 两种模式
+  - 固定随机种子 seed=42，确保可重复
+  - 8 用户/4 部门/5 项目/5 客户端类型
+  - 2 个重度用户（alice, bob）占 70% 消费，模拟真实分布
+  - 注入全部 5 类浪费模式：P1 15%、P2 10%、P3 8%、P4 5%、P5 3%
+  - 80% 记录有 execution_feedback（actual 与 estimated 偏差 10-20%）
+- 验证：200 行种子数据 → 275 条总记录（含 feedback），P1 模式可检测到 9 条 SIMPLE + qwen3.7-max
+- 原因：没有种子数据，audit CLI 无法演示；手工写数据太慢且容易遗漏浪费模式
+- 改了之后好在哪：快速生成任意规模的测试数据，浪费模式注入确保 Detector 有东西可检测
+
+**#70 CLI audit 命令（Rich 格式 + JSON 输出）**
+- 原来：设计文档 §7.3 定义了 `ai-router audit` 命令，但没有具体参数和输出格式
+- 改为：
+  - 参数：`--days N`、`--user`、`--project`、`--department`、`--format rich/json`
+  - Rich 输出 5 个区块：消费汇总、按用户消费（标记重度用户 ⚠️）、按模型消费（标记占比过高）、Top 5 浪费模式表格、优化建议面板
+  - JSON 输出：完整 AuditSummary 序列化，支持程序化处理
+- 原因：CLI 是 Week 2 检查点的必交付物，Rich 格式在答辩时视觉冲击力强
+- 改了之后好在哪：`ai-router audit --days 30` 一键生成审计报告，JSON 模式支持 Web 看板复用
+
+**#71 P4 可降级逻辑修正 + P5 缓存检测修正 + JSON 结构化输出**
+- 原来：
+  - P4 使用 `min(allowed_tiers)` 推导"最低可用 tier"，但 Tier 数字越大越便宜，`min()` 取到的是最贵的 tier
+  - P5 使用 `getattr(m, "supports_prompt_caching", False)` 读取缓存支持，但 ModelEntry 的缓存配置在 `m.cache.supports_prompt_caching` 中
+  - JSON 输出使用 `console.print(json.dumps(...))`，Rich 自动换行导致 JSON 字符串中插入换行符，破坏 JSON 结构
+  - 种子数据重复运行会追加数据而非覆盖
+  - audit CLI 空库时静默返回 0 而非提示用户
+- 改为：
+  - P4：`min(allowed_tiers)` → `max(allowed_tiers)`，变量名改为 `cheapest_tier`，注释明确"Tier 数字越大越便宜"
+  - P5：`getattr(m, "supports_prompt_caching", False)` → `m.cache.supports_prompt_caching is True`
+  - JSON 输出：`console.print()` → `print()`，避免 Rich 自动换行
+  - 种子数据：默认清空 DB，新增 `--append` 参数显式追加
+  - audit CLI：空库时输出警告并退出（exit code 1），新增 `--db` 参数指定数据库路径
+  - P5 种子注入：强制使用支持 caching 的模型（qwen3.7-max/qwen3.7-plus/deepseek-v4-flash），确保 input_tokens > 1024
+- 原因：Review 发现 P4 语义反了（应该用 max 而非 min），P5 读取路径错误导致永远检测不到缓存机会，JSON 输出不是结构化数据
+- 改了之后好在哪：
+  - P4 正确检测"Tier 1 本可降到 Tier 3"的浪费（MODERATE+LOW 场景）
+  - P5 正确检测所有支持 caching 的模型的缓存机会
+  - JSON 输出可被 `json.loads()` 正确解析，支持程序化处理
+  - 种子数据可重复运行，默认覆盖避免数据累积
+  - 空库有明确提示，`--db` 参数支持指定不同数据库
+
+**#72 种子数据从 load_models() 派生 + P2/P5 时间戳有界 + 集成测试自包含**
+- 原来：
+  - `generate_seed_data.py` 硬编码 `MODEL_PRICING` 字典（价格偏离真实配置 5 倍，glm-5.1 tier 错误）
+  - `select_model()` 硬编码 Tier 1/2/3 模型名，`cache_models` 硬编码支持 caching 的模型列表
+  - P2 注入 `timedelta(minutes=1-9)` 和 P5 注入 `timedelta(hours=2-24)` 都可能产生未来时间戳
+  - `test_cli.py` 的 audit 测试直接读本地 `seed.db`（被 .gitignore 排除），CI 上必然失败
+  - Rich 汇总"实际值占比"后面跟的是 token 总量，语义不匹配
+- 改为：
+  - 删除 `MODEL_PRICING` 硬编码，新增 `@lru_cache` 的 `_get_model_catalog()`、`_get_tier_pools()`、`_get_cache_model_names()`
+  - `estimate_cost()` 从 `_get_model_catalog()` 读取定价
+  - `select_model()` 从 `_get_tier_pools()` 读取 tier 池
+  - P5 注入从 `_get_cache_model_names()` 读取支持 caching 的模型
+  - P2 和 P5 注入都加了 bounded delta：`max_minutes = min(9, int(remaining // 60))`，`max_hours = min(24, int(remaining // 3600))`
+  - `test_cli.py` 新增 `seed_db_url` fixture：用 `tmp_path_factory` 创建临时 DB + 调用 `generate_seed_data()` 造数据
+  - Rich 文案"实际值占比"改为"Token 总量"
+- 原因：硬编码价格和 tier 与 `models.yaml` 脱节导致审计金额偏差 5 倍；P2/P5 生成未来时间戳导致 Collector 过滤后记录数不一致；集成测试依赖本地 gitignored 文件
+- 改了之后好在哪：
+  - `models.yaml` 修改后种子数据自动同步（价格、tier、cache 支持）
+  - 276 条写入 = 276 条采集，无未来记录
+  - 集成测试在任何环境可运行（CI、干净 checkout）
+
+**#73 种子数据 execution_feedback.created_at 有界化**
+- 原来：`generate_seed_data.py` 第 315 行给 `execution_feedback.created_at` 加 `timedelta(seconds=rng.randint(10, 300))`，当 routing decision 时间戳接近 `now` 时，feedback 会进入未来
+- 改为：`created_at=min(rec["timestamp"] + timedelta(seconds=rng.randint(10, 300)), now - timedelta(seconds=1))`
+- 原因：虽然 audit 按 `routing_decisions.created_at` 过滤（不影响总调用数），但种子数据里有"未来反馈"是数据一致性瑕疵
+- 改了之后好在哪：`routing_decisions` 和 `execution_feedback` 两张表都零未来记录，种子数据时间完全一致
+
+**#74 B-1 优先级框架 + B-2 压缩引擎**
+- 原来：Phase 5 未实现，上下文工程模块为空
+- 改为：
+  - `priority.py`：`PriorityAssembler` 实现 6 层优先级（System Prompt > 任务描述 > 相关文件 > 历史对话 > 工具输出 > 辅助信息），保护层不可淘汰，非保护层超预算从最低优先级开始淘汰
+  - `compressor.py`：`Compressor` 实现 3 种压缩策略（冗余剔除 + 工具输出截断 + 规则摘要化），6 种 `ContentType` 各有独立摘要规则，策略由 `risk_level` 定上限、`context_length` 定是否触发
+  - 新增 `ContextBlock`、`InputBreakdown`、`CompressionResult` 三个 Pydantic schema
+  - 新增 `ContextLayer`、`ContentType`、`CompressionStrategy` 三个枚举
+- 原因：设计文档 4.6 节定义了上下文工程 B-1/B-2 的能力，需要为 `ai-router optimize` CLI 和 Week 3 B-3 预算管理提供底层支撑
+- 改了之后好在哪：
+  - 上下文可按优先级和预算自动组装/淘汰
+  - 3 种压缩策略（Conservative/Standard/Aggressive）与 risk_level 绑定，高风险任务自动保守压缩
+  - 57 个单元测试覆盖核心逻辑
+
+**#75 ContextBlock 自动 protected + strategy 大小写归一化 + NONE 仍做冗余剔除**
+- 原来：`ContextBlock.protected` 需要调用方手动传 `True`；`NONE` 策略跳过所有处理（含冗余剔除）；YAML 配置里 strategy 用小写（`"conservative"`），枚举用大写（`CONSERVATIVE`），可能不匹配
+- 改为：
+  - `ContextBlock` 用 `model_validator(mode="after")` 自动设置 `protected=True`（`SYSTEM_PROMPT` 和 `TASK_DESCRIPTION`）和 `token_count`
+  - `NONE` 策略仍执行冗余剔除，只跳过摘要/截断（对应配置里 `<5K` 的"仅做明显冗余剔除"）
+  - `select_strategy()` 内部做 `.upper()` 归一化
+  - `estimate_tokens()` 用 `max(1, ceil(len/3))`，非空文本至少 1 token
+  - `CompressionResult` 新增 `applied_actions`、`dropped_blocks`、`warnings` 解释字段
+  - `PLAIN_TEXT` 处理规则：只去连续空行，不做摘要
+- 原因：Review 发现 4 个 P2 问题（token 估算 0、NONE 跳过冗余、protected 手动传、大小写不匹配）+ 2 个 P3（缺解释字段、PLAIN_TEXT 未定义）
+- 改了之后好在哪：
+  - 调用方无需关心 protected 和 token_count，减少出错
+  - 冗余剔除在所有策略级别生效
+  - `optimize` CLI 可以直接读 `applied_actions` 展示优化建议
+
+**#76 Review 修复：AssemblyResult + NONE 预算裁剪 + 对话摘要语义**
+- 原来：
+  - `PriorityAssembler.assemble()` 返回 `list[ContextBlock]`，淘汰的 dropped 被丢弃
+  - `Compressor.compress(NONE + total_budget)` 直接 return，跳过 PriorityAssembler
+  - 对话摘要关键词 `"TODO"` 大写，但 `line.lower()` 后匹配不到
+  - AGGRESSIVE 对话摘要注释说"只保留关键词句"但实现仍保留首末行
+  - 计划/文档说"hash + Jaccard"冗余剔除，实现只有 hash
+- 改为：
+  - 新增 `AssemblyResult` dataclass（`retained`、`dropped`、`actions`），`assemble()` 返回 `AssemblyResult`
+  - `NONE` 策略不再 early return，fall through 到 PriorityAssembler 执行预算裁剪
+  - `Compressor` 收集 `assembly_result.dropped` 和 `.actions` 到 `CompressionResult`
+  - 对话关键词全部小写（`"TODO"` → `"todo"`）
+  - AGGRESSIVE 对话摘要不再保留首末行，只保留关键词句
+  - 冗余剔除降级为"仅 hash 精确去重"（不实现 Jaccard）
+- 原因：Review 发现 1 个 P1（lint）+ 3 个 P2（NONE 预算裁剪、dropped 丢失、Jaccard 未实现）+ 1 个 P3（对话摘要语义不一致）
+- 改了之后好在哪：
+  - `total_budget` 参数在所有策略级别生效（NONE 也能裁剪到预算内）
+  - `optimize` CLI 可以完整展示"删了什么、为什么删"（含预算裁剪）
+  - 对话摘要行为与注释一致，关键词匹配不受大小写影响
+
+**#77 Phase 7续：`ai-router optimize` CLI — Prompt/上下文优化建议**
+- 新增 `PromptOptimizer` 引擎（`src/airouter/engine/optimize/optimizer.py`）
+- 新增 `OptimizationSuggestion` 和 `OptimizeResult` Pydantic schema
+- 新增 `ai-router optimize` CLI 命令（`src/airouter/cli/optimize.py`），支持 `--prompt`、`--context-file`、`--model`、`--scenario`、`--turns`
+- 5 类优化建议：缓存、压缩（3 策略对比）、降级、裁剪、Plan-Execute
+- `Compressor.compress()` 新增 `strategy_override` 参数，支持强制指定压缩策略
+- 原因：设计文档 7.3 节定义了 optimize CLI，development-plan D13 要求实现
+- 改了之后好在哪：
+  - 用户可以拿到 prompt 级的成本优化建议（5 类独立估算）
+  - 压缩建议真正调用 Phase 5 的 Compressor，展示 3 策略对比
+  - 降级/Plan-Execute 建议用真实 prompt token 重新计算成本（不依赖 Router 粗映射）
+  - `warnings` 字段明确标注"理论估算、各优化可能重叠"
+- 关键设计决定：
+  - 真实 prompt token 做基准（覆盖 `features.estimated_input_tokens`）
+  - `_classify_prompt_lines()` 统一行分类，breakdown 和 ContextBlock 共用
+  - `dynamic_query → TASK_DESCRIPTION`（protected，不会被裁掉）
+  - Token 对齐：`dynamic = max(0, global_total - accounted)`
+  - 降级/Plan-Execute 复用 `Selector._filter_base()` 过滤（context window + sensitivity）
+  - 综合节省 `min(current_cost, sum(...))`，标注为"理论最大节省"
+
+**#78 Compressor strategy_override 参数**
+- 原来：`Compressor.compress()` 只能通过 `risk_level + context_length` 自动选策略，无法强制指定
+- 改为：新增 `strategy_override: CompressionStrategy | None = None` 参数，非 None 时覆盖自动选择
+- 原因：`optimize` CLI 需要展示 3 策略对比（CONSERVATIVE/STANDARD/AGGRESSIVE），必须能强制指定策略
+- 改了之后好在哪：CLI 可以展示每种策略的压缩效果，用户可以选择更激进或更保守的策略
+
+**#79 Review 修复：治理语义约束（降级/分层过滤、escalate 检测、互斥节省）**
+- 原来：
+  - `_suggest_downgrade()` 和 `_suggest_plan_execute()` 用 `Selector._filter_base()`（仅 context window + sensitivity），跳过 allowed_tiers 和 capabilities
+  - EXPERT+HIGH 任务（routing_rules 只允许 Tier 1）被建议降到 Tier 2
+  - Plan-Execute 建议只检查 `features.subtasks` 非空，1 个 subtask 也建议分层（开销不划算）
+  - Router escalate（无候选策略）时 optimize 静默输出 cost=0，不提示用户
+  - 无效 `--model nonexistent` exit 0 + cost=0，误导用户
+  - "综合优化后成本" 对所有建议求和，降级+分层互斥导致严重高估
+- 改为：
+  - 降级/分层建议改用 `Selector.filter_candidates()` 做完整硬约束过滤（capabilities + allowed_tiers + context window + sensitivity）
+  - Plan-Execute 要求 `len(subtasks) >= 2`
+  - Router escalate（requires_human_review + 空 models）→ warnings 首条提示"需要人工审核"
+  - CLI 入口校验模型名，不存在就 Exit(1) + 列出可用模型
+  - 正交建议（缓存/压缩/裁剪）可叠加，互斥建议（降级/分层）取 max
+  - 输出标签改为"独立建议合计"+"参考优化成本"
+- 原因：Review 发现 2 个 P1（治理语义 bug）+ 3 个 P2（UX 误导）
+- 改了之后好在哪：
+  - optimize 建议不再绕过路由治理规则（allowed_tiers、capabilities）
+  - 高风险任务不会被错误建议降级到不允许的 Tier
+  - Router escalate 时用户能看到原因，不会误以为"成本为 0 所以不需要优化"
+  - 节省金额不再严重高估（互斥取 max，不叠加）
+  - 新增 5 个测试覆盖这些修复
+
+**#80 Review 二轮修复：Gate 审批语义全量消费 + Engine 层校验 + CLI 硬校验**
+- 原来：
+  - escalate 检测只在 `requires_human_review AND 空 models` 时 warning，高风险但有候选模型时降级/分层建议没有审批提示
+  - `PromptOptimizer.optimize(model_name="nonexistent")` 静默返回 cost=0，CLI 挡住了但 Engine 层没防护
+  - CLI `--scenario BAD` / `--format yaml` / `--turns -5` 不报错，静默忽略或产生误导性输出
+  - 互斥 savings 测试的 `if len(exclusive_items) >= 2:` 分支从未真正执行（prompt 只产生 1 个互斥建议）
+- 改为：
+  - escalate 检测改为所有 `requires_human_review=True` 都 warning；降级/分层 suggestion.details 标 `requires_approval=True`
+  - Engine 层 `optimize()` 校验 model_name 存在性，不存在 raise ValueError（CLI 仍保留前置校验作为 defense-in-depth）
+  - CLI `scenario` 和 `output_format` 改为 `Literal[...]` 类型（Typer 自动拒绝非法值），`turns` 加 `turns < 1` 手动校验
+  - 互斥 savings 测试改为手工设 savings 值 + 验证数学，不依赖 prompt 触发
+- 原因：Review 二轮发现 1 个 P1（Gate 语义漏洞）+ 1 个 P2（Engine 层防护）+ 2 个 P3（输入校验 + 测试覆盖率）
+- 改了之后好在哪：
+  - 高风险任务的降级/分层建议明确标注"需审批"，不会被误当成"可直接执行"
+  - Web/API 直接调用 Engine 时也能拦住无效模型名
+  - CLI 参数非法时用户立即得到清晰错误，不会得到误导性优化结果
+  - 互斥 savings 测试不再依赖 prompt 触发（确定性验证）
+
+**#81 Review 三轮修复：requires_approval 按建议后方案重新判断 + 汇总抽取 + Engine 参数校验**
+- 原来：
+  - `requires_approval` 继承 Router 原始 `decision.requires_human_review`，不基于建议后的方案重新判断。Router 推荐 Tier 1（不需要审批）时，降级到 Tier 2 的建议也标 `requires_approval=False`，但 HIGH risk + Tier 2 按 Gate 条件 2 应该需要审批
+  - Engine 层仍接受非法 `scenario` 和负 `expected_turns`，CLI `Literal` 保护不到 Web/API 直接调用
+  - 互斥 savings 测试手写汇总公式，没打到生产代码的 `_summarize_savings` 逻辑
+- 改为：
+  - 新增 `_check_suggestion_approval()` 方法：对每条降级/分层建议，基于 suggested model/strategy 构建 `GateInput`，调用 `RoutingGate.check_human_review()` 独立判断 `requires_approval`
+  - Engine 层 `optimize()` 新增 scenario 白名单校验和 `expected_turns >= 1` 校验，非法值 raise ValueError
+  - 汇总逻辑抽为 `_summarize_savings()` static method，测试直接调用生产代码
+  - 新增 5 个测试：`test_downgrade_approval_based_on_suggestion_not_router`（P1）、`test_engine_validates_scenario/turns`（P2）、`test_summarize_savings_cap/zero`（P3）
+- 原因：Review 三轮发现 1 个 P1（审批语义继承 bug）+ 1 个 P2（Engine 参数校验缺口）+ 1 个 P3（测试不覆盖生产代码）
+- 改了之后好在哪：
+  - `requires_approval` 准确反映建议后方案的治理约束，不再误导用户"降级到 Tier 2 可以直接执行"
+  - Engine 层参数校验补齐，Web/API 直接调用也能拦住非法输入
+  - 汇总逻辑独立可测，后续修改汇总公式时测试能真正失败
+
+**#82 Review 四轮修复：审批提示浮到 CLI 顶层 + budget_status 真实计算**
+- 原来：
+  - 建议 `details.requires_approval=True` 但 CLI warnings 不提示，Rich 表也不展示，用户看 CLI 时不知道这条降级建议不能直接执行
+  - `_check_suggestion_approval()` 写死 `budget_status=BudgetStatus.OK`，建议后成本超硬预算时 Gate 条件 3 不会触发
+- 改为：
+  - `optimize()` 汇总后检查 `any(s.details.requires_approval)`，有则插入 warning "部分优化建议（降级/分层）需审批后方可执行"
+  - Rich 表对 `requires_approval=True` 的建议在类别列追加红色 "（需审批）" 标签
+  - `_check_suggestion_approval()` 改用 `selector._compute_budget_status(suggested_cost, features)` 计算真实 budget_status
+  - 新增 `test_approval_warning_when_router_ok_but_suggestion_needs_approval` 测试
+- 原因：Review 四轮发现审批信息只存在 suggestion details 里，没有浮到用户可见的顶层；budget_status 硬编码导致超预算场景漏审批
+- 改了之后好在哪：
+  - 用户在 CLI 输出中一眼就能看到哪些建议需要审批（warning + 表格标签），不会误操作
+  - 建议后成本超硬预算时 Gate 条件 3 正确触发，审批语义完整
+
+---
+
+### #83 Benchmark Level 1：离线规则 Benchmark（零 API 成本）
+
+**原来：**
+> 设计文档规划的 Benchmark 三级体系（Level 1 离线规则 / Level 2 真实 API / Level 3 策略回测），但没有实现。
+
+**改为：**
+> 实现 Level 1 离线规则 Benchmark：40 条 YAML 测试样例 → Router 规则引擎 → 6 指标评分。零 API 调用，证明路由决策逻辑正确、稳定、可回归。
+
+**设计决策：**
+
+1. **YAML 格式**（非 JSON）：统一文件 `data/benchmarks/level1/router_cases.yaml`，设计文档原为 `data/benchmark_cases/*.json`
+2. **6 个指标**：
+   - `classification_accuracy` >= 90%（任务分类准确率）
+   - `complexity_accuracy` >= 85%（复杂度准确率）
+   - `role_tier_accuracy` >= 95%（角色 tier 匹配，覆盖 executor/planner/reviewer 三角色）
+   - `strategy_selection_accuracy` >= 85%（策略选择准确率）
+   - `cost_estimation_reasonableness` >= 90%（成本合理性，跳过 no_candidate case）
+   - `constraint_satisfaction` = 100%（硬约束，3 条规则带前提条件）
+3. **Exit code 严格模式**：0 = 所有 case passed 且所有 metric 达标；否则 1
+4. **expected 值来源**：来自设计文档 / routing_rules.yaml / Gate 规则，不为匹配 Router 行为而校准
+5. **诊断顺序**：Router bug → prompt 歧义 → expected 错误
+6. **PE/PER 策略**：当前 Selector 评分中 SINGLE_MODEL 通常优于 PE/PER（Tier 1 质量相同但 PE 有额外成本），benchmark case 反映实际行为
+
+**约束规则（constraint_satisfaction 100%）：**
+- EXPERT 任务不用 Tier 3 executor
+- SIMPLE + LOW risk + sensitivity != HIGH + category 不在 forced review → 不触发 requires_human_review
+- requires_human_review=true → quality_gate 含 "human_review"
+
+**文件结构：**
+- `src/airouter/engine/benchmark/schemas.py`：BenchmarkCase / CaseResult / BenchmarkSummary
+- `src/airouter/engine/benchmark/loader.py`：YAML 加载 + enum 校验
+- `src/airouter/engine/benchmark/scorer.py`：6 指标计算 + case failure 检测
+- `src/airouter/engine/benchmark/runner.py`：Level1BenchmarkRunner
+- `src/airouter/cli/benchmark.py`：CLI 命令（Rich/JSON 输出 + --level + --resume）
+- `data/benchmarks/level1/router_cases.yaml`：40 条测试样例
+- `tests/unit/test_benchmark.py`：34 个单元测试
+- `tests/integration/test_benchmark_level1.py`：13 个集成测试
+
+**改了之后好在哪：**
+- 零 API 成本验证路由规则正确性，可纳入 CI 回归测试
+- 40 条样例覆盖 8 个维度（简单/中等/复杂/高风险/PE/Gate/Context/Budget）
+- 6 指标量化路由质量，硬约束保证安全底线
+- CLI 支持 Rich/JSON 双格式输出，便于自动化和人工审查
+
 ---
 
 ## 未完结的讨论项
 
 > 以下话题尚未深入讨论，后续如有修改再补充。
-> 优先级标注 ⚠️ 的为Week 2开始前需要确定的，其余可在对应开发周再定。
+> 优先级标注 ⚠️ 的为 Week 2 开始前需要确定的，其余可在对应开发周再定。
 
-- ⚠️ **轻量A（可观测性）的浪费模式检测算法** — 支撑audit命令和优化中心
-- ⚠️ **CLI工具的完整命令设计**（参数、输出格式、子命令） — Week 2要交付4个CLI
+- ~~⚠️ **轻量A（可观测性）的浪费模式检测算法**~~ — 已在 Phase 4 实现（P1-P5，见 CHANGELOG #68-#72）
+- ~~⚠️ **CLI工具的完整命令设计**（参数、输出格式、子命令）~~ — analyze/audit 已实现，optimize/benchmark 待 Week 2 后半段
 - Docker部署方案细节 — Week 3 D21实现
 - 最佳实践手册9章的具体内容规划 — Week 4 D23写
 - SOP 5个的具体内容规划 — Week 4 D24写

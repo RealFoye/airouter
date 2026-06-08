@@ -51,12 +51,19 @@ def _output_rich(decision):
     console.print(Panel(feature_text, title="[bold blue]任务特征[/bold blue]", border_style="blue"))
 
     # 推荐方案
-    if decision.models.executor:
+    if decision.models.executor or decision.models.planner:
         rec_text = Text()
         rec_text.append("策略: ", style="bold")
         rec_text.append(f"{decision.recommended_strategy.value}\n")
-        rec_text.append("推荐模型: ", style="bold")
-        rec_text.append(f"{decision.models.executor}\n")
+        if decision.models.planner:
+            rec_text.append("规划模型: ", style="bold")
+            rec_text.append(f"{decision.models.planner}\n")
+        if decision.models.executor:
+            rec_text.append("执行模型: ", style="bold")
+            rec_text.append(f"{decision.models.executor}\n")
+        if decision.models.reviewer:
+            rec_text.append("审查模型: ", style="bold")
+            rec_text.append(f"{decision.models.reviewer}\n")
         rec_text.append("预估成本: ", style="bold")
         rec_text.append(f"¥{decision.estimated_cost:.4f}\n")
         rec_text.append("基线成本: ", style="bold")
@@ -95,9 +102,19 @@ def _output_rich(decision):
         table.add_column("备注")
 
         for alt in decision.alternatives:
+            # 展示模型角色
+            models_parts = []
+            if alt.planner:
+                models_parts.append(f"规划:{alt.planner}")
+            if alt.executor:
+                models_parts.append(f"执行:{alt.executor}")
+            if alt.reviewer:
+                models_parts.append(f"审查:{alt.reviewer}")
+            models_text = ", ".join(models_parts) if models_parts else "-"
+
             table.add_row(
                 alt.strategy.value,
-                alt.model or "-",
+                models_text,
                 f"¥{alt.cost:.4f}",
                 f"{alt.quality:.2f}",
                 alt.note,

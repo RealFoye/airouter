@@ -121,21 +121,21 @@ make test-unit
 
 **目标：4 个 CLI 全部可用**
 
-### Phase 3：模型适配器
+### Phase 3：模型适配器（✅ 已完成 2026-06-05）
 
 | # | 任务 | MVP | 产出文件 | 测试 |
 |---|------|-----|----------|------|
-| 3.1 | BaseAdapter 抽象接口 | 必做 | `src/airouter/adapters/base.py` | `test_adapters.py` |
-| 3.3 | **MockAdapter**（测试用，稳定返回模拟结果） | 必做 | `src/airouter/adapters/mock.py` | 验证稳定返回 |
-| 3.2 | OpenAI 兼容适配器（统一调用 DeepSeek/Qwen/GLM） | 必做 | `src/airouter/adapters/openai_compat.py` | 连通性测试（5 个模型） |
+| 3.1 | BaseAdapter 抽象接口（4 类异常层次 + achat via to_thread） | 必做 | `src/airouter/adapters/base.py` | `test_adapters.py`（33 tests） |
+| 3.3 | **MockAdapter**（hash-based 确定性延迟，测试用） | 必做 | `src/airouter/adapters/mock.py` | 验证稳定返回 |
+| 3.2 | OpenAI 兼容适配器（client 注入 + 错误映射 + empty choices 防御） | 必做 | `src/airouter/adapters/openai_compat.py` | 连通性测试（5 个模型） |
 
-### Phase 2B：策略增强
+### Phase 2B：策略增强（✅ 已完成 2026-06-06）
 
 | # | 任务 | MVP | 产出文件 | 测试 |
 |---|------|-----|----------|------|
-| 2.3 | Classifier：从 TaskFeatures 确定策略触发条件（Plan-Execute 7 条、Guided 5 条） | 必做 | `src/airouter/engine/router/classifier.py` | `test_classifier.py` |
-| 2.6 | **策略候选生成**：SINGLE / GUIDED / PLAN_EXECUTE / PLAN_EXECUTE_REVIEW（先只做成本预估，不真实执行多模型调用链） | 必做 | `selector.py` 扩展 | `test_strategies.py` |
-| 2.8 | **管控门禁**：独立 Gate 模块 + 预算检查 + 人工审核触发（7 条件）+ 质量门禁 + Fallback | 必做 | `gate.py` | `test_gate.py`：7 条件逐条验证 |
+| 2.3 | StrategyClassifier：从 TaskFeatures 确定策略触发条件（Plan-Execute 5 结构条件、Guided 4 结构条件、PER = base_decomposable AND review_need） | 必做 | `src/airouter/engine/router/classifier.py` | `test_classifier.py`（34 tests） |
+| 2.6 | **策略候选生成**：SINGLE / GUIDED / PLAN_EXECUTE / PLAN_EXECUTE_REVIEW（角色池 + Top-K + 组合遍历 + post-filter，成本预估不真实执行多模型调用链） | 必做 | `selector.py` 扩展 | `test_strategies.py`（26 tests） |
+| 2.8 | **管控门禁**：独立 Gate 模块 + 预算检查 + 人工审核触发（7 条件）+ 质量门禁 + Fallback | 必做 | `gate.py` | `test_gate.py`（22 tests） |
 
 ### Phase 2C：LLM 增强
 
@@ -143,14 +143,14 @@ make test-unit
 |---|------|-----|----------|------|
 | 2.2 | LLM TaskAnalyzer（调用 Tier 1 提取结构化特征 JSON，关键词模式作为 fallback） | 可选增强 | `analyzer.py` 扩展 | 真实 API 可用时测 |
 
-### Phase 1（续）：数据库
+### Phase 1（续）：数据库（✅ 已完成 2026-06-06）
 
 | # | 任务 | MVP | 产出文件 | 测试 |
 |---|------|-----|----------|------|
-| 1.5 | SQLAlchemy DB models：4 张表（routing_decisions / execution_feedback / benchmark_results / config_snapshots） | 必做 | `src/airouter/models/db_models.py` | `test_db.py`：表创建 + CRUD |
+| 1.5 | SQLAlchemy DB models：4 张表（routing_decisions / execution_feedback / benchmark_results / config_snapshots） | 必做 | `src/airouter/models/db_models.py` | `test_db.py`（13 tests） |
 | 1.6 | DB 初始化 + session 管理 | 必做 | `src/airouter/models/database.py` | 同上 |
 
-### Phase 4：审计引擎
+### Phase 4：审计引擎（✅ 已完成 2026-06-06）
 
 | # | 任务 | MVP | 产出文件 | 测试 |
 |---|------|-----|----------|------|
@@ -161,38 +161,38 @@ make test-unit
 | 4.4 | **Detector：5 类浪费模式检测**（高配滥用 / 重复调用 / 过长上下文 / 可降级未降级 / 缓存未命中） | 必做 | `src/airouter/engine/audit/detector.py` | 验证 5 类模式可识别 |
 | 4.5 | Attribution：消费归因分析 | 必做 | `src/airouter/engine/audit/attribution.py` | 同上 |
 
-### Phase 7（续）：CLI audit
+### Phase 7（续）：CLI audit（✅ 已完成 2026-06-06）
 
 | # | 任务 | MVP | 产出文件 | 测试 |
 |---|------|-----|----------|------|
-| 7.2 | **`ai-router audit`**：消费归因 + 浪费模式 Top N + 优化建议 | 必做 | `src/airouter/cli/audit.py` | `test_cli.py` |
+| 7.2 | **`ai-router audit`**：消费归因 + 浪费模式 Top N + 优化建议 | 必做 | `src/airouter/cli/audit.py` | `test_audit.py`（19 tests） |
 
-### Phase 5（部分）：上下文工程 B-1/B-2
+### Phase 5（部分）：上下文工程 B-1/B-2（✅ 已完成 2026-06-08）
 
 | # | 任务 | MVP | 产出文件 | 测试 |
 |---|------|-----|----------|------|
-| 5.1 | B-1 上下文优先级框架（System Prompt > 任务描述 > 相关文件 > 历史对话） | 必做 | `src/airouter/engine/context/priority.py` | `test_context.py` |
-| 5.2 | B-2 压缩引擎：冗余剔除 + 截断 + 规则摘要化（5 种上下文类型×结构化规则） | 必做 | `src/airouter/engine/context/compressor.py` | 验证 3 策略 token 下降 |
+| 5.1 | B-1 上下文优先级框架（System Prompt > 任务描述 > 相关文件 > 历史对话） | 必做 | `src/airouter/engine/context/priority.py` | `test_context_optimizer.py`（57 tests） |
+| 5.2 | B-2 压缩引擎：冗余剔除 + 截断 + 规则摘要化（6 种上下文类型×结构化规则） | 必做 | `src/airouter/engine/context/compressor.py` | 同上 |
 | 5.3 | B-2 压缩策略分级（Conservative/Standard/Aggressive × risk_level 绑定）+ 分层目标 | 必做 | 同上 | 同上 |
 
-### Phase 7（续）：CLI optimize
+### Phase 7（续）：CLI optimize（✅ 已完成 2026-06-08）
 
 | # | 任务 | MVP | 产出文件 | 测试 |
 |---|------|-----|----------|------|
 | 7.3 | **`ai-router optimize`**：上下文优化建议 + 压缩前后 Token 估算 + 3 策略对比 | 必做 | `src/airouter/cli/optimize.py` | `test_cli.py` |
 
-### Phase 6（部分）：Benchmark Level 1
+### Phase 6（部分）：Benchmark Level 1 ✅ 2026-06-08
 
 | # | 任务 | MVP | 产出文件 | 测试 |
 |---|------|-----|----------|------|
-| 6.1a | Level 1 规则样例：先写 30 条（覆盖 10 类别×4 复杂度） | 必做 | `data/benchmark_cases/*.json` | — |
-| 6.2 | Level 1 runner：规则分类准确率 + Tier 推荐准确率（0 API 成本） | 必做 | `src/airouter/engine/benchmark/runner.py` | `test_benchmark.py` |
+| 6.1a | ~~Level 1 规则样例：先写 30 条（覆盖 10 类别×4 复杂度）~~ ✅ | 必做 | `data/benchmarks/level1/router_cases.yaml`（40 条 YAML） | — |
+| 6.2 | ~~Level 1 runner：规则分类准确率 + Tier 推荐准确率（0 API 成本）~~ ✅ | 必做 | `src/airouter/engine/benchmark/runner.py` | `test_benchmark.py`（34 tests） |
 
-### Phase 7（续）：CLI benchmark
+### Phase 7（续）：CLI benchmark ✅ 2026-06-08
 
 | # | 任务 | MVP | 产出文件 | 测试 |
 |---|------|-----|----------|------|
-| 7.4 | **`ai-router benchmark --level 1`**（支持 `--resume`） | 必做 | `src/airouter/cli/benchmark.py` | `test_cli.py` |
+| 7.4 | ~~**`ai-router benchmark --level 1`**（支持 `--resume`）~~ ✅ | 必做 | `src/airouter/cli/benchmark.py` | `test_benchmark_level1.py`（13 tests） |
 
 ### D14：后台启动 Level 2
 

@@ -1,6 +1,6 @@
 import typer
 
-from airouter.cli import analyze
+from airouter.cli import analyze, audit, benchmark, optimize
 
 app = typer.Typer(
     name="ai-router",
@@ -9,6 +9,9 @@ app = typer.Typer(
 )
 
 app.command("analyze")(analyze.analyze)
+app.command("audit")(audit.audit)
+app.command("benchmark")(benchmark.benchmark)
+app.command("optimize")(optimize.optimize)
 
 
 @app.callback()

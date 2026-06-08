@@ -49,8 +49,7 @@ def test_router_end_to_end(router: Router, desc: str):
 
     # 基本字段检查
     assert decision.task_hash
-    assert decision.recommended_strategy == StrategyType.SINGLE_MODEL
-    assert decision.models.executor is not None
+    assert decision.recommended_strategy in StrategyType
     assert decision.estimated_cost >= 0
     assert decision.baseline_cost >= 0
     assert 0 <= decision.estimated_savings <= 1
@@ -59,6 +58,10 @@ def test_router_end_to_end(router: Router, desc: str):
     assert isinstance(decision.quality_gate, list)
     assert isinstance(decision.fallback_policy, list)
     assert decision.config_version
+
+    # 非 escalate 场景应有 executor
+    if decision.task_hash != "escalate":
+        assert decision.models.executor is not None
 
 
 def test_router_high_risk_requires_review(router: Router):
@@ -148,3 +151,38 @@ def test_policy_high_risk_tier1_no_downgrade_trigger(router: Router):
     # Tier 1 执行，不应因"降级"触发审核
     if decision.human_review_reason:
         assert "降级" not in decision.human_review_reason
+
+
+def test_router_escalates_when_no_candidates(router: Router):
+    """所有策略被 post-filter 排除 → escalate to human。"""
+    from unittest.mock import patch
+
+    with patch.object(router.selector, "select_best_strategy", return_value=[]):
+        decision = router.route("写一个FastAPI JWT鉴权中间件")
+        assert decision.requires_human_review is True
+        assert decision.human_review_reason == "无候选策略满足条件"
+        assert decision.task_hash == "escalate"
+        assert decision.models.executor is None
+
+
+def test_router_per_decision_has_all_roles(router: Router):
+    """Mock selector 返回 PER StrategyScore → Router 应把三角色带到 decision。"""
+    from unittest.mock import patch
+
+    from airouter.engine.router.selector import StrategyScore
+    from airouter.models.schemas import ModelAssignment
+
+    per_score = StrategyScore(
+        strategy=StrategyType.PLAN_EXECUTE_REVIEW,
+        model_assignment=ModelAssignment(
+            planner="qwen3.7-max", executor="qwen3.7-plus", reviewer="deepseek-v4-pro",
+        ),
+        cost=0.05, quality=0.80, capability=0.9, latency=0.6,
+    )
+    with patch.object(router.selector, "select_best_strategy", return_value=[per_score]):
+        decision = router.route("设计一个支持百万并发的消息推送系统")
+
+    assert decision.recommended_strategy == StrategyType.PLAN_EXECUTE_REVIEW
+    assert decision.models.planner == "qwen3.7-max"
+    assert decision.models.executor == "qwen3.7-plus"
+    assert decision.models.reviewer == "deepseek-v4-pro"

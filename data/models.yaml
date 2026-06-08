@@ -6,10 +6,10 @@ models:
   - name: "qwen3.7-max"
     tier: 1
     provider: "dashscope"
-    api_base: "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    input_price_per_1k: 0.02      # CNY per 1K tokens
-    output_price_per_1k: 0.06
-    max_context_window: 131072
+    api_base: "https://token.cvte.com/v1"
+    input_price_per_1k: 0.012     # CNY per 1K tokens (CCH: CNY 12 / 1M)
+    output_price_per_1k: 0.036    # CCH: CNY 36 / 1M
+    max_context_window: 991000
     capabilities:
       - code_gen
       - complex_reasoning
@@ -33,10 +33,10 @@ models:
   - name: "deepseek-v4-pro"
     tier: 1
     provider: "deepseek"
-    api_base: "https://api.deepseek.com/v1"
-    input_price_per_1k: 0.015
-    output_price_per_1k: 0.05
-    max_context_window: 131072
+    api_base: "https://token.cvte.com/v1"
+    input_price_per_1k: 0.012     # CCH: CNY 12 / 1M
+    output_price_per_1k: 0.024    # CCH: CNY 24 / 1M
+    max_context_window: 1000000
     capabilities:
       - code_gen
       - complex_reasoning
@@ -49,16 +49,21 @@ models:
     allow_sensitive_data: true
     latency_estimate_ms: 3500
     cache:
-      supports_prompt_caching: false
+      supports_prompt_caching: true
+      cache_mode: implicit
+      cache_write_price_multiplier: 1.0
+      cache_read_price_ratio: 0.10
+      cache_min_prefix_tokens: 1024
+      cache_ttl_seconds: 300
 
   # ── Tier 2（标准）：通用编码、文档生成 ──
   - name: "qwen3.7-plus"
     tier: 2
     provider: "dashscope"
-    api_base: "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    input_price_per_1k: 0.008
-    output_price_per_1k: 0.02
-    max_context_window: 131072
+    api_base: "https://token.cvte.com/v1"
+    input_price_per_1k: 0.00125   # CCH: CNY 1.25 / 1M
+    output_price_per_1k: 0.00375  # CCH: CNY 3.75 / 1M
+    max_context_window: 991000
     capabilities:
       - code_gen
       - complex_reasoning
@@ -80,10 +85,10 @@ models:
   - name: "glm-5.1"
     tier: 2
     provider: "zhipu"
-    api_base: "https://open.bigmodel.cn/api/paas/v4"
-    input_price_per_1k: 0.01
-    output_price_per_1k: 0.025
-    max_context_window: 128000
+    api_base: "https://token.cvte.com/v1"
+    input_price_per_1k: 0.008     # CCH: CNY 8 / 1M
+    output_price_per_1k: 0.028    # CCH: CNY 28 / 1M
+    max_context_window: 200000
     capabilities:
       - code_gen
       - complex_reasoning
@@ -94,16 +99,21 @@ models:
     allow_sensitive_data: true
     latency_estimate_ms: 2500
     cache:
-      supports_prompt_caching: false
+      supports_prompt_caching: true
+      cache_mode: implicit
+      cache_write_price_multiplier: 1.0
+      cache_read_price_ratio: 0.10
+      cache_min_prefix_tokens: 1024
+      cache_ttl_seconds: 300
 
   # ── Tier 3（快速）：执行、批量、简单任务 ──
   - name: "deepseek-v4-flash"
     tier: 3
     provider: "deepseek"
-    api_base: "https://api.deepseek.com/v1"
-    input_price_per_1k: 0.002
-    output_price_per_1k: 0.005
-    max_context_window: 65536
+    api_base: "https://token.cvte.com/v1"
+    input_price_per_1k: 0.004     # CCH: CNY 4 / 1M
+    output_price_per_1k: 0.008    # CCH: CNY 8 / 1M
+    max_context_window: 1000000
     capabilities:
       - code_gen
       - complex_reasoning

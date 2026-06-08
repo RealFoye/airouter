@@ -73,3 +73,37 @@ class BudgetStatus(str, Enum):
     WARNING = "WARNING"
     OVER_BUDGET = "OVER_BUDGET"
     OVER_HARD_BUDGET = "OVER_HARD_BUDGET"
+
+
+# ── 上下文工程枚举 ─────────────────────────────────────────
+
+
+class ContextLayer(str, Enum):
+    """上下文优先级层（P1 最高 → P6 最低）。"""
+
+    SYSTEM_PROMPT = "SYSTEM_PROMPT"
+    TASK_DESCRIPTION = "TASK_DESCRIPTION"
+    RELATED_FILES = "RELATED_FILES"
+    CONVERSATION_HISTORY = "CONVERSATION_HISTORY"
+    TOOL_OUTPUT = "TOOL_OUTPUT"
+    AUXILIARY = "AUXILIARY"
+
+
+class ContentType(str, Enum):
+    """上下文内容类型，决定摘要规则。"""
+
+    PLAIN_TEXT = "PLAIN_TEXT"
+    CODE = "CODE"
+    CONVERSATION = "CONVERSATION"
+    TOOL_OUTPUT = "TOOL_OUTPUT"
+    ERROR_LOG = "ERROR_LOG"
+    DOCUMENTATION = "DOCUMENTATION"
+
+
+class CompressionStrategy(str, Enum):
+    """压缩策略级别。"""
+
+    NONE = "NONE"
+    CONSERVATIVE = "CONSERVATIVE"
+    STANDARD = "STANDARD"
+    AGGRESSIVE = "AGGRESSIVE"

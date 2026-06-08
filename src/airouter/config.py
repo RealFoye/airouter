@@ -7,7 +7,7 @@ from typing import Any, Optional, Union
 
 import yaml
 from pydantic import BaseModel, Field, field_validator
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # ── 项目根目录 ──────────────────────────────────────────────
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -19,7 +19,17 @@ class AppSettings(BaseSettings):
     db_url: str = Field(default="sqlite:///./airouter.db")
     debug: bool = False
 
-    model_config = {"env_prefix": "AIROUTER_"}
+    # 模型 API keys（通过环境变量 AIROUTER_DASHSCOPE_API_KEY 等设置）
+    dashscope_api_key: str = ""
+    deepseek_api_key: str = ""
+    zhipu_api_key: str = ""
+
+    model_config = SettingsConfigDict(
+        env_prefix="AIROUTER_",
+        env_file=PROJECT_ROOT / ".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
 
 settings = AppSettings()

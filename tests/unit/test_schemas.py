@@ -156,7 +156,7 @@ def test_routing_decision_serialization():
         alternatives=[
             AlternativeStrategy(
                 strategy=StrategyType.SINGLE_MODEL,
-                model="qwen3.7-max",
+                executor="qwen3.7-max",
                 cost=0.40,
                 quality=0.80,
                 note="质量更高但成本更高",
@@ -203,7 +203,7 @@ def test_benchmark_result():
         input_tokens=2000,
         output_tokens=500,
         cost_cny=0.01,
-        actual_latency_ms=800,
+        latency_ms=800,
         quality_score=0.72,
     )
     assert result.suite_name == "level2_comparison"
@@ -213,7 +213,7 @@ def test_benchmark_result():
 def test_config_snapshot():
     snapshot = ConfigSnapshot(
         config_version="v1.0",
-        models_config_hash="hash1",
+        models_hash="hash1",
         routing_rules_hash="hash2",
         budgets_hash="hash3",
         quality_defaults_hash="hash4",
