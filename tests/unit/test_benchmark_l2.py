@@ -7,7 +7,7 @@ import pytest
 import yaml
 
 from airouter.engine.benchmark.runner import Level2BenchmarkRunner
-from airouter.engine.benchmark.schemas import L2Summary
+from airouter.engine.benchmark.schemas import ExecutorResult, L2Summary
 
 
 @pytest.fixture
@@ -109,14 +109,45 @@ class TestLevel2Runner:
         lines = [line for line in jsonl_path.read_text().strip().split("\n") if line]
         assert len(lines) == 4  # 2 cases × 2 models
 
+    def test_jsonl_includes_response_metadata(self, cases_yaml, output_dir, monkeypatch):
+        """raw_usage diagnostic fields should be persisted to results.jsonl."""
+        runner = _make_runner(cases_yaml, output_dir)
+
+        def fake_execute(model_name, messages, max_tokens=None):
+            return ExecutorResult(
+                response_content="def is_palindrome(s):\n    return s == s[::-1]",
+                input_tokens=10,
+                output_tokens=1024,
+                latency_ms=123,
+                cost_cny=0.01,
+                attempts=1,
+                api_params={"max_tokens": max_tokens},
+                raw_usage={
+                    "finish_reason": "length",
+                    "reasoning_tokens": 1017,
+                    "reasoning_starved": True,
+                    "completion_tokens": 1024,
+                },
+            )
+
+        monkeypatch.setattr(runner._executor, "execute", fake_execute)
+        summary = runner.run(max_pairs=1)
+        jsonl_path = output_dir / summary.run_id / "results.jsonl"
+        record = json.loads(jsonl_path.read_text(encoding="utf-8").splitlines()[0])
+
+        assert record["response_metadata"]["finish_reason"] == "length"
+        assert record["response_metadata"]["reasoning_tokens"] == 1017
+        assert record["response_metadata"]["reasoning_starved"] is True
+
     def test_raw_outputs_saved(self, cases_yaml, output_dir):
         runner = _make_runner(cases_yaml, output_dir)
         summary = runner.run()
         raw_dir = output_dir / summary.run_id / "raw_outputs"
         raw_files = list(raw_dir.iterdir())
-        assert len(raw_files) == 4
-        for f in raw_files:
-            assert f.suffix == ".txt"
+        # 4 .txt files + 4 _meta.json files
+        txt_files = [f for f in raw_files if f.suffix == ".txt"]
+        assert len(txt_files) == 4
+        for f in txt_files:
             assert f.read_text(encoding="utf-8").startswith("[Mock]")
 
     def test_model_scores_computed(self, cases_yaml, output_dir):

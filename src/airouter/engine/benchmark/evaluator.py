@@ -1,9 +1,12 @@
-"""Level 2 auto-evaluator: AST + structure + keyword scoring (no code execution)."""
+"""Level 2 auto-evaluator: AST + structure + keyword scoring + safe test execution."""
 
 from __future__ import annotations
 
 import ast
 import re
+import subprocess
+import tempfile
+from pathlib import Path
 from typing import Any, Callable
 
 from airouter.engine.benchmark.schemas import L2Case, ScoreResult
@@ -17,6 +20,15 @@ ISSUE_KEYWORDS: dict[str, list[str]] = {
     "race_condition": ["race condition", "竞态", "lock", "mutex", "thread safe"],
     "deadlock": ["deadlock", "死锁", "circular lock", "交叉获取锁"],
     "memory_leak": ["memory leak", "内存泄漏", "unclosed", "未关闭", "connection pool"],
+    "resource_leak": [
+        "resource leak", "资源泄漏", "文件句柄", "文件描述符", "file descriptor",
+        "session.close", "close()", "未释放", "连接池", "socket", "上下文管理器",
+        "context manager", "with open", "finally",
+    ],
+    "logic_error": [
+        "logic error", "逻辑错误", "累加", "加法", "sum", "total +=",
+        "* 10", "乘以 10", "should be +", "应该用+", "改为+",
+    ],
     "none_type": ["none", "null", "attributeerror", "nonetype", "is none"],
     "index_error": ["index", "越界", "out of range", "indexerror", "list index"],
     "infinite_loop": ["infinite loop", "无限循环", "死循环", "break", "while true"],
@@ -331,14 +343,8 @@ def score_architecture(case: L2Case, output: str) -> ScoreResult:
     ]
     structure = sum(checks) / len(checks)
 
-    # depth: length bucketing
-    length = len(output)
-    if length < 100:
-        depth = 0.0
-    elif length < 500:
-        depth = 0.5
-    else:
-        depth = 1.0
+    # depth: dimension-group scoring (7 groups, each counted once)
+    depth = _score_architecture_depth(output)
 
     overall = requirement_coverage * 0.4 + structure * 0.3 + depth * 0.3
     return ScoreResult(
@@ -349,8 +355,135 @@ def score_architecture(case: L2Case, output: str) -> ScoreResult:
             "structure": structure,
             "depth": depth,
         },
-        details={"output_length": length, "req_hits": req_hits, "req_total": req_total},
+        details={"output_length": len(output), "req_hits": req_hits, "req_total": req_total},
     )
+
+
+# ── Architecture depth scoring ─────────────────────────────────
+
+_ARCHITECTURE_DIMENSION_GROUPS: dict[str, list[str]] = {
+    "components": ["service", "module", "layer", "gateway", "middleware", "proxy", "component", "组件", "模块", "层", "网关", "中间件"],
+    "data_flow": ["pipeline", "queue", "stream", "event", "message", "pub", "sub", "数据流", "管道", "队列", "事件", "消息"],
+    "failure_modes": ["failover", "retry", "circuit_breaker", "fallback", "timeout", "故障转移", "重试", "熔断", "降级", "超时", "容错"],
+    "scalability": ["horizontal_scaling", "load_balancing", "sharding", "partitioning", "scale", "水平扩展", "负载均衡", "分片", "分区", "扩容"],
+    "tradeoffs": ["tradeoff", "trade-off", "vs", "pros", "cons", "cost_vs", "consistency_vs", "权衡", "取舍", "利弊", "优劣"],
+    "observability": ["logging", "monitoring", "metrics", "tracing", "alerting", "observability", "日志", "监控", "指标", "链路追踪", "告警", "可观测"],
+    "security": ["auth", "encryption", "rbac", "audit", "isolation", "tls", "ssl", "认证", "加密", "审计", "隔离", "安全"],
+}
+
+
+def _score_architecture_depth(output: str) -> float:
+    """Score architecture depth using 7 dimension groups + length fallback."""
+    output_lower = output.lower()
+
+    # Dimension group scoring: each group scores 0 or 1
+    groups_hit = 0
+    for _group_name, keywords in _ARCHITECTURE_DIMENSION_GROUPS.items():
+        if any(kw.lower() in output_lower for kw in keywords):
+            groups_hit += 1
+    dimension_score = groups_hit / 7.0
+
+    # Length-based fallback (kept as secondary signal)
+    length = len(output)
+    if length < 100:
+        length_score = 0.0
+    elif length < 500:
+        length_score = 0.5
+    else:
+        length_score = 1.0
+
+    return 0.7 * dimension_score + 0.3 * length_score
+
+
+# ── Test code execution (safe sandbox) ────────────────────────
+
+_DANGEROUS_MODULES = {"os", "shutil", "subprocess", "socket", "requests", "pathlib", "sys", "ctypes", "importlib"}
+
+
+def _ast_denylist_check(code: str) -> str | None:
+    """Check code against AST denylist. Returns denied module name or None."""
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return None  # Syntax errors will be caught during execution
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                root_module = alias.name.split(".")[0]
+                if root_module in _DANGEROUS_MODULES:
+                    return root_module
+        elif isinstance(node, ast.ImportFrom):
+            if node.module:
+                root_module = node.module.split(".")[0]
+                if root_module in _DANGEROUS_MODULES:
+                    return root_module
+    return None
+
+
+def _execute_test_code(model_output: str, test_code: str, timeout: int = 10) -> dict[str, Any]:
+    """Execute test_code against extracted model output in a safe sandbox.
+
+    Returns {"pass_rate": float, "passed": int, "failed": int, "error": str | None}.
+    Never raises exceptions — all errors are captured in the result dict.
+    """
+    # 1. Extract code from model output
+    code = extract_code(model_output)
+
+    # 2. AST denylist check
+    denied = _ast_denylist_check(code)
+    if denied:
+        return {"pass_rate": 0.0, "passed": 0, "failed": 0, "error": f"denied: {denied}"}
+
+    # 3. Execute in temp directory with python -I
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            solution_path = Path(tmpdir) / "solution.py"
+            test_path = Path(tmpdir) / "test_solution.py"
+            solution_path.write_text(code)
+            test_path.write_text(
+                f"import sys\nsys.path.insert(0, '{tmpdir}')\nfrom solution import *\n{test_code}"
+            )
+
+            result = subprocess.run(
+                ["python3", "-I", str(test_path)],
+                cwd=tmpdir,
+                timeout=timeout,
+                capture_output=True,
+                text=True,
+            )
+
+            # Parse test results from output
+            stdout = result.stdout
+            stderr = result.stderr
+            passed = stdout.count("OK") + stdout.count("ok")
+            failed = stdout.count("FAIL") + stdout.count("ERROR")
+
+            # If pytest-style output, try to parse summary
+            summary_match = re.search(r"(\d+) passed", stdout)
+            if summary_match:
+                passed = int(summary_match.group(1))
+            fail_match = re.search(r"(\d+) failed", stdout)
+            if fail_match:
+                failed = int(fail_match.group(1))
+
+            total = passed + failed
+            if total == 0:
+                # Fallback: use return code
+                if result.returncode == 0:
+                    return {"pass_rate": 1.0, "passed": 1, "failed": 0, "error": None}
+                else:
+                    error_msg = (stderr[:200] or stdout[:200] or "unknown error").strip()
+                    return {"pass_rate": 0.0, "passed": 0, "failed": 1, "error": error_msg}
+
+            pass_rate = passed / total if total > 0 else 0.0
+            error = stderr[:200].strip() if result.returncode != 0 else None
+            return {"pass_rate": pass_rate, "passed": passed, "failed": failed, "error": error}
+
+    except subprocess.TimeoutExpired:
+        return {"pass_rate": 0.0, "passed": 0, "failed": 0, "error": f"timeout after {timeout}s"}
+    except Exception as e:
+        return {"pass_rate": 0.0, "passed": 0, "failed": 0, "error": str(e)[:200]}
 
 
 # ── Dispatcher ────────────────────────────────────────────────
@@ -365,9 +498,33 @@ SCORER_DISPATCH: dict[str, Callable[[L2Case, str], ScoreResult]] = {
 }
 
 
-def auto_score(case: L2Case, output: str) -> ScoreResult:
-    """Dispatch to the appropriate scorer based on case.scoring_type."""
+def auto_score(
+    case: L2Case,
+    output: str,
+    response_metadata: dict[str, Any] | None = None,
+) -> ScoreResult:
+    """Dispatch to the appropriate scorer based on case.scoring_type.
+
+    If response_metadata contains model_truncated=True, cap score at 0.65.
+    If case.allow_execution and case.test_code, run test_code in sandbox.
+    """
     scorer = SCORER_DISPATCH.get(case.scoring_type)
     if not scorer:
         raise ValueError(f"Unknown scoring_type: {case.scoring_type}")
-    return scorer(case, output)
+    result = scorer(case, output)
+
+    # Truncation penalty: only model_truncated affects score
+    meta = response_metadata or {}
+    if meta.get("model_truncated", False):
+        result.overall_score = min(result.overall_score, 0.65)
+        result.details["model_truncated"] = True
+
+    # Test code execution (only for allow_execution cases)
+    if case.allow_execution and case.test_code:
+        test_results = _execute_test_code(output, case.test_code)
+        result.details["test_results"] = test_results
+        if test_results["error"] is None and test_results["pass_rate"] > 0:
+            # Blend test pass_rate into overall score (20% weight)
+            result.overall_score = 0.8 * result.overall_score + 0.2 * test_results["pass_rate"]
+
+    return result

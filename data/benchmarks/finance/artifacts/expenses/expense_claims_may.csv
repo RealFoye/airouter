@@ -1,0 +1,13 @@
+claim_id,employee,dept,date,category,city,amount_cny,invoice_no,invoice_title,attendees,purpose
+ER-1001,Zhang Wei,Sales,2026-05-08,hotel,Shanghai,680.0,INV-H-1001,广州视源电子科技股份有限公司,,client visit
+ER-1001,Zhang Wei,Sales,2026-05-08,client_meal,Shanghai,420.0,INV-M-1001,广州视源电子科技股份有限公司,2,client dinner
+ER-1001,Zhang Wei,Sales,2026-05-08,taxi,Shanghai,95.0,INV-T-1001,广州视源电子科技股份有限公司,,airport to hotel
+ER-1002,Li Na,R&D,2026-05-12,flight,Guangzhou-Beijing,1580.0,INV-F-2001,李娜,,project review
+ER-1002,Li Na,R&D,2026-05-12,hotel,Beijing,520.0,INV-H-2001,广州视源电子科技股份有限公司,,project review
+ER-1003,Chen Hao,Finance,2026-05-20,training_meal,Hangzhou,180.0,INV-M-3001,广州视源电子科技股份有限公司,1,training
+ER-1003,Chen Hao,Finance,2026-05-20,hotel,Hangzhou,430.0,INV-H-3001,广州视源电子科技股份有限公司,,training
+ER-1004,Wang Min,Sales,2026-05-22,taxi,Shenzhen,88.0,INV-T-4001,广州视源电子科技股份有限公司,,customer site
+ER-1004,Wang Min,Sales,2026-05-22,taxi,Shenzhen,88.0,INV-T-4001,广州视源电子科技股份有限公司,,duplicate copy
+ER-1004,Wang Min,Sales,2026-05-22,client_meal,Shenzhen,360.0,INV-M-4001,广州视源电子科技股份有限公司,1,
+ER-1005,Liu Fang,HR,2026-04-01,hotel,Chengdu,470.0,INV-H-5001,广州视源电子科技股份有限公司,,campus hiring
+ER-1005,Liu Fang,HR,2026-04-01,taxi,Chengdu,132.0,INV-T-5001,广州视源电子科技股份有限公司,,"hotel to university, no approval"

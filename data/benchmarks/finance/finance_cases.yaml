@@ -1,0 +1,2649 @@
+version: finance-1.0
+description: Synthetic enterprise finance office benchmark for table calculation, reimbursement audit, AP matching, bank reconciliation,
+  budget analysis, and policy QA.
+source_policy: Fictional data. Public benchmarks are used only as task-shape inspiration, not copied cases.
+public_inspirations:
+- name: SpreadsheetBench
+  url: https://spreadsheetbench.github.io/
+  used_for: spreadsheet task patterns
+- name: FinanceBench
+  url: https://huggingface.co/datasets/PatronusAI/financebench
+  used_for: finance document QA framing
+- name: FinQA
+  url: https://finqasite.github.io/
+  used_for: financial numerical reasoning
+- name: TAT-QA
+  url: https://nextplusplus.github.io/TAT-QA/
+  used_for: table-text question answering
+- name: DocILE
+  url: https://docile.rossum.ai/
+  used_for: invoice/purchase-order document tasks
+models:
+- qwen3.7-max
+- qwen3.7-plus
+- deepseek-v4-flash
+- deepseek-v4-pro
+- glm-5.1
+scoring_principles:
+- Numeric fields are rule-scored with cent-level tolerance.
+- Required findings are recall-scored with evidence requirements.
+- Hallucinated violations should be penalized.
+- LLM judge may assess explanation quality but must not override numeric ground truth.
+cases:
+- id: FIN-TAB-001
+  domain: FINANCE_OFFICE
+  category: TABLE_CALCULATION
+  task_type: DATA_PROCESSING
+  complexity: SIMPLE
+  prompt: 根据费用表计算 ER-1001 的原始合计金额。只输出 JSON。
+  input_context: '费用表 expense_claims_may.csv：
+
+    ER-1001: hotel Shanghai 680; client_meal 420 with 2 attendees; taxi 95.
+
+    ER-1002: flight Guangzhou-Beijing 1580 with personal invoice title 李娜; hotel Beijing 520.
+
+    ER-1003: training_meal Hangzhou 180 with 1 attendee; hotel Hangzhou 430.
+
+    ER-1004: taxi 88 invoice INV-T-4001 appears twice; client_meal 360 with 1 attendee and empty purpose.
+
+    ER-1005: hotel Chengdu 470; taxi Chengdu 132, no approval.'
+  artifacts:
+  - artifacts/expenses/expense_claims_may.csv
+  output_format:
+    type: json
+    required_fields:
+    - decision
+    - amounts
+    - findings
+    - evidence
+    - confidence
+  expected_answer:
+    amounts:
+      raw_total_cny: 1195.0
+    required_findings: []
+    decision: calculate
+  evaluation:
+    primary: rule_based
+    numeric_tolerance: 0.01
+    penalize_hallucinated_findings: true
+    evidence_required: true
+    scoring_type: finance_numeric
+    exact_amounts:
+    - raw_total_cny
+  max_tokens: 8192
+  tags:
+  - spreadsheet
+  - sum
+  notes: 基础合计，类似 SpreadsheetBench 的表格聚合任务。
+- id: FIN-TAB-002
+  domain: FINANCE_OFFICE
+  category: TABLE_CALCULATION
+  task_type: DATA_PROCESSING
+  complexity: MODERATE
+  prompt: 按部门汇总费用表中的原始报销金额，并找出金额最高的部门。只输出 JSON。
+  input_context: '费用表 expense_claims_may.csv：
+
+    ER-1001: hotel Shanghai 680; client_meal 420 with 2 attendees; taxi 95.
+
+    ER-1002: flight Guangzhou-Beijing 1580 with personal invoice title 李娜; hotel Beijing 520.
+
+    ER-1003: training_meal Hangzhou 180 with 1 attendee; hotel Hangzhou 430.
+
+    ER-1004: taxi 88 invoice INV-T-4001 appears twice; client_meal 360 with 1 attendee and empty purpose.
+
+    ER-1005: hotel Chengdu 470; taxi Chengdu 132, no approval.'
+  artifacts:
+  - artifacts/expenses/expense_claims_may.csv
+  output_format:
+    type: json
+    required_fields:
+    - decision
+    - amounts
+    - findings
+    - evidence
+    - confidence
+  expected_answer:
+    amounts:
+      Sales: 1731.0
+      R&D: 2100.0
+      Finance: 610.0
+      HR: 602.0
+    top_item:
+      dept: R&D
+      amount_cny: 2100.0
+    decision: calculate
+  evaluation:
+    primary: rule_based
+    numeric_tolerance: 0.01
+    penalize_hallucinated_findings: true
+    evidence_required: true
+    scoring_type: finance_groupby
+    exact_amounts:
+    - Sales
+    - R&D
+    - Finance
+    - HR
+  max_tokens: 8192
+  tags:
+  - spreadsheet
+  - groupby
+  notes: 部门维度分类汇总。
+- id: FIN-TAB-003
+  domain: FINANCE_OFFICE
+  category: TABLE_CALCULATION
+  task_type: DATA_PROCESSING
+  complexity: MODERATE
+  prompt: 根据差旅制度，计算 ER-1001 可报销金额、不可报销金额，并列出原因。只输出 JSON。
+  input_context: '# 差旅及费用报销制度（Synthetic）
+
+
+    适用范围：员工差旅、客户拜访、培训及项目执行费用报销。
+
+
+    ## 发票与时限
+
+    - 发票抬头必须为“广州视源电子科技股份有限公司”，个人抬头不可报销。
+
+    - 报销应在费用发生后 30 天内提交，逾期需部门负责人审批；本 benchmark 中无审批附件时按不可报销处理。
+
+    - 同一发票号码不得重复报销。
+
+
+    ## 住宿
+
+    - 一线城市（北京、上海、广州、深圳）住宿标准上限为 600 元/晚。
+
+    - 其他城市住宿标准上限为 450 元/晚。
+
+    - 超出标准部分不可报销。
+
+
+    ## 餐费
+
+    - 员工个人餐费上限为 120 元/人/天。
+
+    - 客户招待餐费上限为 200 元/人/次，必须填写客户人数和业务目的。
+
+    - 酒水、私人聚餐不可报销。
+
+
+    ## 交通
+
+    - 市内出租车单次 100 元以内可直接报销，超过 100 元需说明路线并经主管审批；无审批附件时超出部分不可报销。
+
+    - 机票仅报销经济舱。发票抬头不合规时整笔机票不可报销。
+
+
+
+    费用表 expense_claims_may.csv：
+
+    ER-1001: hotel Shanghai 680; client_meal 420 with 2 attendees; taxi 95.
+
+    ER-1002: flight Guangzhou-Beijing 1580 with personal invoice title 李娜; hotel Beijing 520.
+
+    ER-1003: training_meal Hangzhou 180 with 1 attendee; hotel Hangzhou 430.
+
+    ER-1004: taxi 88 invoice INV-T-4001 appears twice; client_meal 360 with 1 attendee and empty purpose.
+
+    ER-1005: hotel Chengdu 470; taxi Chengdu 132, no approval.'
+  artifacts:
+  - artifacts/policies/travel_policy.md
+  - artifacts/expenses/expense_claims_may.csv
+  output_format:
+    type: json
+    required_fields:
+    - decision
+    - amounts
+    - findings
+    - evidence
+    - confidence
+  expected_answer:
+    amounts:
+      approved_amount_cny: 1095.0
+      rejected_amount_cny: 100.0
+    required_findings:
+    - hotel_over_limit_80
+    - client_meal_over_limit_20
+    decision: partial_approve
+  evaluation:
+    primary: rule_based
+    numeric_tolerance: 0.01
+    penalize_hallucinated_findings: true
+    evidence_required: true
+    scoring_type: finance_policy_numeric
+    exact_amounts:
+    - approved_amount_cny
+    - rejected_amount_cny
+    required_findings:
+    - hotel_over_limit_80
+    - client_meal_over_limit_20
+  max_tokens: 8192
+  tags:
+  - policy
+  - reimbursement
+  notes: 计算+制度套用。
+- id: FIN-TAB-004
+  domain: FINANCE_OFFICE
+  category: TABLE_CALCULATION
+  task_type: DATA_PROCESSING
+  complexity: MODERATE
+  prompt: 找出费用表中所有重复发票号，并计算重复报销风险金额。只输出 JSON。
+  input_context: '费用表 expense_claims_may.csv：
+
+    ER-1001: hotel Shanghai 680; client_meal 420 with 2 attendees; taxi 95.
+
+    ER-1002: flight Guangzhou-Beijing 1580 with personal invoice title 李娜; hotel Beijing 520.
+
+    ER-1003: training_meal Hangzhou 180 with 1 attendee; hotel Hangzhou 430.
+
+    ER-1004: taxi 88 invoice INV-T-4001 appears twice; client_meal 360 with 1 attendee and empty purpose.
+
+    ER-1005: hotel Chengdu 470; taxi Chengdu 132, no approval.'
+  artifacts:
+  - artifacts/expenses/expense_claims_may.csv
+  output_format:
+    type: json
+    required_fields:
+    - decision
+    - amounts
+    - findings
+    - evidence
+    - confidence
+  expected_answer:
+    amounts:
+      duplicate_risk_amount_cny: 88.0
+    required_findings:
+    - INV-T-4001 duplicated in ER-1004
+    decision: flag
+  evaluation:
+    primary: rule_based
+    numeric_tolerance: 0.01
+    penalize_hallucinated_findings: true
+    evidence_required: true
+    scoring_type: finance_duplicate
+    exact_amounts:
+    - duplicate_risk_amount_cny
+    required_findings:
+    - INV-T-4001
+  max_tokens: 8192
+  tags:
+  - duplicate
+  - invoice
+  notes: 重复发票检测。
+- id: FIN-TAB-005
+  domain: FINANCE_OFFICE
+  category: TABLE_CALCULATION
+  task_type: DATA_PROCESSING
+  complexity: COMPLEX
+  prompt: 对所有报销单应用差旅制度，计算每个 claim_id 的可报销金额。只输出 JSON。
+  input_context: '# 差旅及费用报销制度（Synthetic）
+
+
+    适用范围：员工差旅、客户拜访、培训及项目执行费用报销。
+
+
+    ## 发票与时限
+
+    - 发票抬头必须为“广州视源电子科技股份有限公司”，个人抬头不可报销。
+
+    - 报销应在费用发生后 30 天内提交，逾期需部门负责人审批；本 benchmark 中无审批附件时按不可报销处理。
+
+    - 同一发票号码不得重复报销。
+
+
+    ## 住宿
+
+    - 一线城市（北京、上海、广州、深圳）住宿标准上限为 600 元/晚。
+
+    - 其他城市住宿标准上限为 450 元/晚。
+
+    - 超出标准部分不可报销。
+
+
+    ## 餐费
+
+    - 员工个人餐费上限为 120 元/人/天。
+
+    - 客户招待餐费上限为 200 元/人/次，必须填写客户人数和业务目的。
+
+    - 酒水、私人聚餐不可报销。
+
+
+    ## 交通
+
+    - 市内出租车单次 100 元以内可直接报销，超过 100 元需说明路线并经主管审批；无审批附件时超出部分不可报销。
+
+    - 机票仅报销经济舱。发票抬头不合规时整笔机票不可报销。
+
+
+
+    费用表 expense_claims_may.csv：
+
+    ER-1001: hotel Shanghai 680; client_meal 420 with 2 attendees; taxi 95.
+
+    ER-1002: flight Guangzhou-Beijing 1580 with personal invoice title 李娜; hotel Beijing 520.
+
+    ER-1003: training_meal Hangzhou 180 with 1 attendee; hotel Hangzhou 430.
+
+    ER-1004: taxi 88 invoice INV-T-4001 appears twice; client_meal 360 with 1 attendee and empty purpose.
+
+    ER-1005: hotel Chengdu 470; taxi Chengdu 132, no approval.'
+  artifacts:
+  - artifacts/policies/travel_policy.md
+  - artifacts/expenses/expense_claims_may.csv
+  output_format:
+    type: json
+    required_fields:
+    - decision
+    - amounts
+    - findings
+    - evidence
+    - confidence
+  expected_answer:
+    amounts:
+      ER-1001: 1095.0
+      ER-1002: 520.0
+      ER-1003: 550.0
+      ER-1004: 88.0
+      ER-1005: 550.0
+    decision: calculate
+  evaluation:
+    primary: rule_based
+    numeric_tolerance: 0.01
+    penalize_hallucinated_findings: true
+    evidence_required: true
+    scoring_type: finance_batch_policy
+    exact_amounts:
+    - ER-1001
+    - ER-1002
+    - ER-1003
+    - ER-1004
+    - ER-1005
+  max_tokens: 12288
+  tags:
+  - batch
+  - policy
+  notes: 批量规则计算。
+- id: FIN-TAB-006
+  domain: FINANCE_OFFICE
+  category: TABLE_CALCULATION
+  task_type: DATA_PROCESSING
+  complexity: COMPLEX
+  prompt: 按 claim_id 计算原始金额与可报销金额差异，找出差异最大的报销单。只输出 JSON。
+  input_context: '# 差旅及费用报销制度（Synthetic）
+
+
+    适用范围：员工差旅、客户拜访、培训及项目执行费用报销。
+
+
+    ## 发票与时限
+
+    - 发票抬头必须为“广州视源电子科技股份有限公司”，个人抬头不可报销。
+
+    - 报销应在费用发生后 30 天内提交，逾期需部门负责人审批；本 benchmark 中无审批附件时按不可报销处理。
+
+    - 同一发票号码不得重复报销。
+
+
+    ## 住宿
+
+    - 一线城市（北京、上海、广州、深圳）住宿标准上限为 600 元/晚。
+
+    - 其他城市住宿标准上限为 450 元/晚。
+
+    - 超出标准部分不可报销。
+
+
+    ## 餐费
+
+    - 员工个人餐费上限为 120 元/人/天。
+
+    - 客户招待餐费上限为 200 元/人/次，必须填写客户人数和业务目的。
+
+    - 酒水、私人聚餐不可报销。
+
+
+    ## 交通
+
+    - 市内出租车单次 100 元以内可直接报销，超过 100 元需说明路线并经主管审批；无审批附件时超出部分不可报销。
+
+    - 机票仅报销经济舱。发票抬头不合规时整笔机票不可报销。
+
+
+
+    费用表 expense_claims_may.csv：
+
+    ER-1001: hotel Shanghai 680; client_meal 420 with 2 attendees; taxi 95.
+
+    ER-1002: flight Guangzhou-Beijing 1580 with personal invoice title 李娜; hotel Beijing 520.
+
+    ER-1003: training_meal Hangzhou 180 with 1 attendee; hotel Hangzhou 430.
+
+    ER-1004: taxi 88 invoice INV-T-4001 appears twice; client_meal 360 with 1 attendee and empty purpose.
+
+    ER-1005: hotel Chengdu 470; taxi Chengdu 132, no approval.'
+  artifacts:
+  - artifacts/policies/travel_policy.md
+  - artifacts/expenses/expense_claims_may.csv
+  output_format:
+    type: json
+    required_fields:
+    - decision
+    - amounts
+    - findings
+    - evidence
+    - confidence
+  expected_answer:
+    amounts:
+      largest_gap_cny: 1580.0
+    top_item:
+      claim_id: ER-1002
+      reason: personal invoice title flight rejected
+    decision: calculate
+  evaluation:
+    primary: rule_based
+    numeric_tolerance: 0.01
+    penalize_hallucinated_findings: true
+    evidence_required: true
+    scoring_type: finance_variance
+    exact_amounts:
+    - largest_gap_cny
+    required_findings:
+    - ER-1002
+  max_tokens: 12288
+  tags:
+  - variance
+  - policy
+  notes: 找最大差异和原因。
+- id: FIN-EXP-001
+  domain: FINANCE_OFFICE
+  category: REIMBURSEMENT_AUDIT
+  task_type: DATA_PROCESSING
+  complexity: MODERATE
+  prompt: 审核 ER-1002，判断是否可报销并给出批准金额和违规项。只输出 JSON。
+  input_context: '# 差旅及费用报销制度（Synthetic）
+
+
+    适用范围：员工差旅、客户拜访、培训及项目执行费用报销。
+
+
+    ## 发票与时限
+
+    - 发票抬头必须为“广州视源电子科技股份有限公司”，个人抬头不可报销。
+
+    - 报销应在费用发生后 30 天内提交，逾期需部门负责人审批；本 benchmark 中无审批附件时按不可报销处理。
+
+    - 同一发票号码不得重复报销。
+
+
+    ## 住宿
+
+    - 一线城市（北京、上海、广州、深圳）住宿标准上限为 600 元/晚。
+
+    - 其他城市住宿标准上限为 450 元/晚。
+
+    - 超出标准部分不可报销。
+
+
+    ## 餐费
+
+    - 员工个人餐费上限为 120 元/人/天。
+
+    - 客户招待餐费上限为 200 元/人/次，必须填写客户人数和业务目的。
+
+    - 酒水、私人聚餐不可报销。
+
+
+    ## 交通
+
+    - 市内出租车单次 100 元以内可直接报销，超过 100 元需说明路线并经主管审批；无审批附件时超出部分不可报销。
+
+    - 机票仅报销经济舱。发票抬头不合规时整笔机票不可报销。
+
+
+
+    费用表 expense_claims_may.csv：
+
+    ER-1001: hotel Shanghai 680; client_meal 420 with 2 attendees; taxi 95.
+
+    ER-1002: flight Guangzhou-Beijing 1580 with personal invoice title 李娜; hotel Beijing 520.
+
+    ER-1003: training_meal Hangzhou 180 with 1 attendee; hotel Hangzhou 430.
+
+    ER-1004: taxi 88 invoice INV-T-4001 appears twice; client_meal 360 with 1 attendee and empty purpose.
+
+    ER-1005: hotel Chengdu 470; taxi Chengdu 132, no approval.'
+  artifacts:
+  - artifacts/policies/travel_policy.md
+  - artifacts/expenses/expense_claims_may.csv
+  output_format:
+    type: json
+    required_fields:
+    - decision
+    - amounts
+    - findings
+    - evidence
+    - confidence
+  expected_answer:
+    amounts:
+      approved_amount_cny: 520.0
+      rejected_amount_cny: 1580.0
+    required_findings:
+    - flight_personal_invoice_title
+    decision: partial_approve
+  evaluation:
+    primary: rule_based
+    numeric_tolerance: 0.01
+    penalize_hallucinated_findings: true
+    evidence_required: true
+    scoring_type: finance_reimbursement
+    exact_amounts:
+    - approved_amount_cny
+    - rejected_amount_cny
+    required_findings:
+    - personal invoice
+    - 李娜
+  max_tokens: 8192
+  tags:
+  - reimbursement
+  - invoice_title
+  notes: 个人抬头整笔机票拒绝。
+- id: FIN-EXP-002
+  domain: FINANCE_OFFICE
+  category: REIMBURSEMENT_AUDIT
+  task_type: DATA_PROCESSING
+  complexity: SIMPLE
+  prompt: 审核 ER-1003，计算可报销金额。只输出 JSON。
+  input_context: '# 差旅及费用报销制度（Synthetic）
+
+
+    适用范围：员工差旅、客户拜访、培训及项目执行费用报销。
+
+
+    ## 发票与时限
+
+    - 发票抬头必须为“广州视源电子科技股份有限公司”，个人抬头不可报销。
+
+    - 报销应在费用发生后 30 天内提交，逾期需部门负责人审批；本 benchmark 中无审批附件时按不可报销处理。
+
+    - 同一发票号码不得重复报销。
+
+
+    ## 住宿
+
+    - 一线城市（北京、上海、广州、深圳）住宿标准上限为 600 元/晚。
+
+    - 其他城市住宿标准上限为 450 元/晚。
+
+    - 超出标准部分不可报销。
+
+
+    ## 餐费
+
+    - 员工个人餐费上限为 120 元/人/天。
+
+    - 客户招待餐费上限为 200 元/人/次，必须填写客户人数和业务目的。
+
+    - 酒水、私人聚餐不可报销。
+
+
+    ## 交通
+
+    - 市内出租车单次 100 元以内可直接报销，超过 100 元需说明路线并经主管审批；无审批附件时超出部分不可报销。
+
+    - 机票仅报销经济舱。发票抬头不合规时整笔机票不可报销。
+
+
+
+    费用表 expense_claims_may.csv：
+
+    ER-1001: hotel Shanghai 680; client_meal 420 with 2 attendees; taxi 95.
+
+    ER-1002: flight Guangzhou-Beijing 1580 with personal invoice title 李娜; hotel Beijing 520.
+
+    ER-1003: training_meal Hangzhou 180 with 1 attendee; hotel Hangzhou 430.
+
+    ER-1004: taxi 88 invoice INV-T-4001 appears twice; client_meal 360 with 1 attendee and empty purpose.
+
+    ER-1005: hotel Chengdu 470; taxi Chengdu 132, no approval.'
+  artifacts:
+  - artifacts/policies/travel_policy.md
+  - artifacts/expenses/expense_claims_may.csv
+  output_format:
+    type: json
+    required_fields:
+    - decision
+    - amounts
+    - findings
+    - evidence
+    - confidence
+  expected_answer:
+    amounts:
+      approved_amount_cny: 550.0
+      rejected_amount_cny: 60.0
+    required_findings:
+    - training_meal_over_personal_limit_60
+    decision: partial_approve
+  evaluation:
+    primary: rule_based
+    numeric_tolerance: 0.01
+    penalize_hallucinated_findings: true
+    evidence_required: true
+    scoring_type: finance_reimbursement
+    exact_amounts:
+    - approved_amount_cny
+    - rejected_amount_cny
+    required_findings:
+    - meal over limit
+    - '60'
+  max_tokens: 8192
+  tags:
+  - reimbursement
+  - meal
+  notes: 个人餐费限额。
+- id: FIN-EXP-003
+  domain: FINANCE_OFFICE
+  category: REIMBURSEMENT_AUDIT
+  task_type: DATA_PROCESSING
+  complexity: COMPLEX
+  prompt: 审核 ER-1004：注意重复发票、客户餐费人数和业务目的。给出批准金额。只输出 JSON。
+  input_context: '# 差旅及费用报销制度（Synthetic）
+
+
+    适用范围：员工差旅、客户拜访、培训及项目执行费用报销。
+
+
+    ## 发票与时限
+
+    - 发票抬头必须为“广州视源电子科技股份有限公司”，个人抬头不可报销。
+
+    - 报销应在费用发生后 30 天内提交，逾期需部门负责人审批；本 benchmark 中无审批附件时按不可报销处理。
+
+    - 同一发票号码不得重复报销。
+
+
+    ## 住宿
+
+    - 一线城市（北京、上海、广州、深圳）住宿标准上限为 600 元/晚。
+
+    - 其他城市住宿标准上限为 450 元/晚。
+
+    - 超出标准部分不可报销。
+
+
+    ## 餐费
+
+    - 员工个人餐费上限为 120 元/人/天。
+
+    - 客户招待餐费上限为 200 元/人/次，必须填写客户人数和业务目的。
+
+    - 酒水、私人聚餐不可报销。
+
+
+    ## 交通
+
+    - 市内出租车单次 100 元以内可直接报销，超过 100 元需说明路线并经主管审批；无审批附件时超出部分不可报销。
+
+    - 机票仅报销经济舱。发票抬头不合规时整笔机票不可报销。
+
+
+
+    费用表 expense_claims_may.csv：
+
+    ER-1001: hotel Shanghai 680; client_meal 420 with 2 attendees; taxi 95.
+
+    ER-1002: flight Guangzhou-Beijing 1580 with personal invoice title 李娜; hotel Beijing 520.
+
+    ER-1003: training_meal Hangzhou 180 with 1 attendee; hotel Hangzhou 430.
+
+    ER-1004: taxi 88 invoice INV-T-4001 appears twice; client_meal 360 with 1 attendee and empty purpose.
+
+    ER-1005: hotel Chengdu 470; taxi Chengdu 132, no approval.'
+  artifacts:
+  - artifacts/policies/travel_policy.md
+  - artifacts/expenses/expense_claims_may.csv
+  output_format:
+    type: json
+    required_fields:
+    - decision
+    - amounts
+    - findings
+    - evidence
+    - confidence
+  expected_answer:
+    amounts:
+      approved_amount_cny: 88.0
+      rejected_amount_cny: 448.0
+    required_findings:
+    - duplicate_invoice_INV-T-4001
+    - client_meal_missing_purpose_or_over_limit
+    decision: partial_approve
+  evaluation:
+    primary: rule_based
+    numeric_tolerance: 0.01
+    penalize_hallucinated_findings: true
+    evidence_required: true
+    scoring_type: finance_reimbursement
+    exact_amounts:
+    - approved_amount_cny
+    - rejected_amount_cny
+    required_findings:
+    - duplicate
+    - missing purpose
+  max_tokens: 12288
+  tags:
+  - reimbursement
+  - duplicate
+  notes: 多规则叠加。
+- id: FIN-EXP-004
+  domain: FINANCE_OFFICE
+  category: REIMBURSEMENT_AUDIT
+  task_type: DATA_PROCESSING
+  complexity: MODERATE
+  prompt: 审核 ER-1005，判断住宿和出租车分别能报多少。只输出 JSON。
+  input_context: '# 差旅及费用报销制度（Synthetic）
+
+
+    适用范围：员工差旅、客户拜访、培训及项目执行费用报销。
+
+
+    ## 发票与时限
+
+    - 发票抬头必须为“广州视源电子科技股份有限公司”，个人抬头不可报销。
+
+    - 报销应在费用发生后 30 天内提交，逾期需部门负责人审批；本 benchmark 中无审批附件时按不可报销处理。
+
+    - 同一发票号码不得重复报销。
+
+
+    ## 住宿
+
+    - 一线城市（北京、上海、广州、深圳）住宿标准上限为 600 元/晚。
+
+    - 其他城市住宿标准上限为 450 元/晚。
+
+    - 超出标准部分不可报销。
+
+
+    ## 餐费
+
+    - 员工个人餐费上限为 120 元/人/天。
+
+    - 客户招待餐费上限为 200 元/人/次，必须填写客户人数和业务目的。
+
+    - 酒水、私人聚餐不可报销。
+
+
+    ## 交通
+
+    - 市内出租车单次 100 元以内可直接报销，超过 100 元需说明路线并经主管审批；无审批附件时超出部分不可报销。
+
+    - 机票仅报销经济舱。发票抬头不合规时整笔机票不可报销。
+
+
+
+    费用表 expense_claims_may.csv：
+
+    ER-1001: hotel Shanghai 680; client_meal 420 with 2 attendees; taxi 95.
+
+    ER-1002: flight Guangzhou-Beijing 1580 with personal invoice title 李娜; hotel Beijing 520.
+
+    ER-1003: training_meal Hangzhou 180 with 1 attendee; hotel Hangzhou 430.
+
+    ER-1004: taxi 88 invoice INV-T-4001 appears twice; client_meal 360 with 1 attendee and empty purpose.
+
+    ER-1005: hotel Chengdu 470; taxi Chengdu 132, no approval.'
+  artifacts:
+  - artifacts/policies/travel_policy.md
+  - artifacts/expenses/expense_claims_may.csv
+  output_format:
+    type: json
+    required_fields:
+    - decision
+    - amounts
+    - findings
+    - evidence
+    - confidence
+  expected_answer:
+    amounts:
+      approved_amount_cny: 550.0
+      rejected_amount_cny: 52.0
+    required_findings:
+    - chengdu_hotel_cap_450
+    - taxi_over_100_no_approval
+    decision: partial_approve
+  evaluation:
+    primary: rule_based
+    numeric_tolerance: 0.01
+    penalize_hallucinated_findings: true
+    evidence_required: true
+    scoring_type: finance_reimbursement
+    exact_amounts:
+    - approved_amount_cny
+    - rejected_amount_cny
+    required_findings:
+    - '450'
+    - taxi
+  max_tokens: 8192
+  tags:
+  - reimbursement
+  - cap
+  notes: 非一线城市住宿上限+出租车上限。
+- id: FIN-EXP-005
+  domain: FINANCE_OFFICE
+  category: REIMBURSEMENT_AUDIT
+  task_type: DATA_PROCESSING
+  complexity: COMPLEX
+  prompt: 从费用表中找出所有应触发人工审核或拒绝的项目，按严重程度排序。只输出 JSON。
+  input_context: '# 差旅及费用报销制度（Synthetic）
+
+
+    适用范围：员工差旅、客户拜访、培训及项目执行费用报销。
+
+
+    ## 发票与时限
+
+    - 发票抬头必须为“广州视源电子科技股份有限公司”，个人抬头不可报销。
+
+    - 报销应在费用发生后 30 天内提交，逾期需部门负责人审批；本 benchmark 中无审批附件时按不可报销处理。
+
+    - 同一发票号码不得重复报销。
+
+
+    ## 住宿
+
+    - 一线城市（北京、上海、广州、深圳）住宿标准上限为 600 元/晚。
+
+    - 其他城市住宿标准上限为 450 元/晚。
+
+    - 超出标准部分不可报销。
+
+
+    ## 餐费
+
+    - 员工个人餐费上限为 120 元/人/天。
+
+    - 客户招待餐费上限为 200 元/人/次，必须填写客户人数和业务目的。
+
+    - 酒水、私人聚餐不可报销。
+
+
+    ## 交通
+
+    - 市内出租车单次 100 元以内可直接报销，超过 100 元需说明路线并经主管审批；无审批附件时超出部分不可报销。
+
+    - 机票仅报销经济舱。发票抬头不合规时整笔机票不可报销。
+
+
+
+    费用表 expense_claims_may.csv：
+
+    ER-1001: hotel Shanghai 680; client_meal 420 with 2 attendees; taxi 95.
+
+    ER-1002: flight Guangzhou-Beijing 1580 with personal invoice title 李娜; hotel Beijing 520.
+
+    ER-1003: training_meal Hangzhou 180 with 1 attendee; hotel Hangzhou 430.
+
+    ER-1004: taxi 88 invoice INV-T-4001 appears twice; client_meal 360 with 1 attendee and empty purpose.
+
+    ER-1005: hotel Chengdu 470; taxi Chengdu 132, no approval.'
+  artifacts:
+  - artifacts/policies/travel_policy.md
+  - artifacts/expenses/expense_claims_may.csv
+  output_format:
+    type: json
+    required_fields:
+    - decision
+    - amounts
+    - findings
+    - evidence
+    - confidence
+  expected_answer:
+    required_findings:
+    - ER-1002 personal invoice title
+    - ER-1004 duplicated invoice
+    - ER-1004 missing client meal purpose
+    - ER-1005 taxi over limit no approval
+    decision: flag
+  evaluation:
+    primary: rule_based
+    numeric_tolerance: 0.01
+    penalize_hallucinated_findings: true
+    evidence_required: true
+    scoring_type: finance_risk_list
+    required_findings:
+    - ER-1002
+    - ER-1004
+    - ER-1005
+  max_tokens: 12288
+  tags:
+  - risk
+  - audit
+  notes: 风险列表召回。
+- id: FIN-EXP-006
+  domain: FINANCE_OFFICE
+  category: REIMBURSEMENT_AUDIT
+  task_type: DATA_PROCESSING
+  complexity: EXPERT
+  prompt: 请输出一份报销审核 JSON 汇总：总原始金额、总可报销金额、总拒绝金额、每个拒绝原因的金额影响。只输出 JSON。
+  input_context: '# 差旅及费用报销制度（Synthetic）
+
+
+    适用范围：员工差旅、客户拜访、培训及项目执行费用报销。
+
+
+    ## 发票与时限
+
+    - 发票抬头必须为“广州视源电子科技股份有限公司”，个人抬头不可报销。
+
+    - 报销应在费用发生后 30 天内提交，逾期需部门负责人审批；本 benchmark 中无审批附件时按不可报销处理。
+
+    - 同一发票号码不得重复报销。
+
+
+    ## 住宿
+
+    - 一线城市（北京、上海、广州、深圳）住宿标准上限为 600 元/晚。
+
+    - 其他城市住宿标准上限为 450 元/晚。
+
+    - 超出标准部分不可报销。
+
+
+    ## 餐费
+
+    - 员工个人餐费上限为 120 元/人/天。
+
+    - 客户招待餐费上限为 200 元/人/次，必须填写客户人数和业务目的。
+
+    - 酒水、私人聚餐不可报销。
+
+
+    ## 交通
+
+    - 市内出租车单次 100 元以内可直接报销，超过 100 元需说明路线并经主管审批；无审批附件时超出部分不可报销。
+
+    - 机票仅报销经济舱。发票抬头不合规时整笔机票不可报销。
+
+
+
+    费用表 expense_claims_may.csv：
+
+    ER-1001: hotel Shanghai 680; client_meal 420 with 2 attendees; taxi 95.
+
+    ER-1002: flight Guangzhou-Beijing 1580 with personal invoice title 李娜; hotel Beijing 520.
+
+    ER-1003: training_meal Hangzhou 180 with 1 attendee; hotel Hangzhou 430.
+
+    ER-1004: taxi 88 invoice INV-T-4001 appears twice; client_meal 360 with 1 attendee and empty purpose.
+
+    ER-1005: hotel Chengdu 470; taxi Chengdu 132, no approval.'
+  artifacts:
+  - artifacts/policies/travel_policy.md
+  - artifacts/expenses/expense_claims_may.csv
+  output_format:
+    type: json
+    required_fields:
+    - decision
+    - amounts
+    - findings
+    - evidence
+    - confidence
+  expected_answer:
+    amounts:
+      raw_total_cny: 5043.0
+      approved_total_cny: 2803.0
+      rejected_total_cny: 2240.0
+    required_findings:
+    - personal_invoice_title_1580
+    - over_limits
+    - duplicate_invoice
+    - missing_purpose
+    decision: summarize
+  evaluation:
+    primary: rule_based
+    numeric_tolerance: 0.01
+    penalize_hallucinated_findings: true
+    evidence_required: true
+    scoring_type: finance_audit_summary
+    exact_amounts:
+    - raw_total_cny
+    - approved_total_cny
+    - rejected_total_cny
+    required_findings:
+    - '1580'
+    - duplicate
+    - missing purpose
+  max_tokens: 12288
+  tags:
+  - summary
+  - audit
+  notes: 端到端报销审核汇总。
+- id: FIN-AP-001
+  domain: FINANCE_OFFICE
+  category: AP_THREE_WAY_MATCH
+  task_type: DATA_PROCESSING
+  complexity: MODERATE
+  prompt: 审核 AP-9001 是否满足付款条件，计算可付款金额和审批要求。只输出 JSON。
+  input_context: '# 采购付款与三单匹配制度（Synthetic）
+
+
+    ## 三单匹配
+
+    - 合同、采购订单、发票、验收记录的供应商、金额、税率、币种必须一致。
+
+    - 按数量验收的采购，付款金额不得超过已验收数量对应金额。
+
+    - 发票金额超过合同/PO/验收可付款金额时，应拒绝付款或仅按可付款金额部分付款。
+
+
+    ## 付款条件
+
+    - 合同写明“验收后付款”的，必须有验收记录才可付款。
+
+    - 合同写明“签约预付款”的，可按合同约定比例付款。
+
+    - 供应商银行账户变更时，必须有供应商主数据变更审批。
+
+
+    ## 审批阈值
+
+    - 单笔付款 50,000 元以上需要财务经理审批。
+
+    - 单笔付款 100,000 元以上需要 CFO 审批。
+
+
+
+    三单匹配表 three_way_match.csv：
+
+    AP-9001 Huaxin Cloud: contract ex-tax 120000, VAT 6%, invoice inc-tax 63600, condition 50% after acceptance, accepted.
+
+    AP-9002 Anji Furniture: contract ex-tax 64000, VAT 13%, invoice inc-tax 72800, accepted 200/200 chairs.
+
+    AP-9003 Nanfang Tech: contract vendor is Nanfang Consulting, invoice vendor is Nanfang Tech, invoice inc-tax 53000.
+
+    AP-9004 Yida Hardware: 100 units at total ex-tax 98000, VAT 13%, accepted 96 units, invoice inc-tax 110740.
+
+    AP-9005 North Star SaaS: contract ex-tax 240000, VAT 6%, invoice inc-tax 63600, 25% signing prepayment, signed.
+
+    AP-9006 Donghai Logistics: ex-tax 30000, VAT 9%, invoice inc-tax 32700, not accepted.'
+  artifacts:
+  - artifacts/policies/ap_policy.md
+  - artifacts/ap/three_way_match.csv
+  output_format:
+    type: json
+    required_fields:
+    - decision
+    - amounts
+    - findings
+    - evidence
+    - confidence
+  expected_answer:
+    amounts:
+      payable_amount_cny: 63600.0
+    required_findings:
+    - accepted
+    - finance_manager_approval_required
+    decision: approve_with_approval
+  evaluation:
+    primary: rule_based
+    numeric_tolerance: 0.01
+    penalize_hallucinated_findings: true
+    evidence_required: true
+    scoring_type: finance_ap_match
+    exact_amounts:
+    - payable_amount_cny
+    required_findings:
+    - accepted
+    - '50000'
+  max_tokens: 8192
+  tags:
+  - ap
+  - approval
+  notes: 验收后 50% 付款。
+- id: FIN-AP-002
+  domain: FINANCE_OFFICE
+  category: AP_THREE_WAY_MATCH
+  task_type: DATA_PROCESSING
+  complexity: MODERATE
+  prompt: 审核 AP-9002，判断发票金额是否与合同/PO一致，给出差异。只输出 JSON。
+  input_context: '# 采购付款与三单匹配制度（Synthetic）
+
+
+    ## 三单匹配
+
+    - 合同、采购订单、发票、验收记录的供应商、金额、税率、币种必须一致。
+
+    - 按数量验收的采购，付款金额不得超过已验收数量对应金额。
+
+    - 发票金额超过合同/PO/验收可付款金额时，应拒绝付款或仅按可付款金额部分付款。
+
+
+    ## 付款条件
+
+    - 合同写明“验收后付款”的，必须有验收记录才可付款。
+
+    - 合同写明“签约预付款”的，可按合同约定比例付款。
+
+    - 供应商银行账户变更时，必须有供应商主数据变更审批。
+
+
+    ## 审批阈值
+
+    - 单笔付款 50,000 元以上需要财务经理审批。
+
+    - 单笔付款 100,000 元以上需要 CFO 审批。
+
+
+
+    三单匹配表 three_way_match.csv：
+
+    AP-9001 Huaxin Cloud: contract ex-tax 120000, VAT 6%, invoice inc-tax 63600, condition 50% after acceptance, accepted.
+
+    AP-9002 Anji Furniture: contract ex-tax 64000, VAT 13%, invoice inc-tax 72800, accepted 200/200 chairs.
+
+    AP-9003 Nanfang Tech: contract vendor is Nanfang Consulting, invoice vendor is Nanfang Tech, invoice inc-tax 53000.
+
+    AP-9004 Yida Hardware: 100 units at total ex-tax 98000, VAT 13%, accepted 96 units, invoice inc-tax 110740.
+
+    AP-9005 North Star SaaS: contract ex-tax 240000, VAT 6%, invoice inc-tax 63600, 25% signing prepayment, signed.
+
+    AP-9006 Donghai Logistics: ex-tax 30000, VAT 9%, invoice inc-tax 32700, not accepted.'
+  artifacts:
+  - artifacts/policies/ap_policy.md
+  - artifacts/ap/three_way_match.csv
+  output_format:
+    type: json
+    required_fields:
+    - decision
+    - amounts
+    - findings
+    - evidence
+    - confidence
+  expected_answer:
+    amounts:
+      expected_invoice_amount_cny: 72320.0
+      over_billed_cny: 480.0
+    required_findings:
+    - invoice_over_billed_480
+    decision: reject_or_adjust
+  evaluation:
+    primary: rule_based
+    numeric_tolerance: 0.01
+    penalize_hallucinated_findings: true
+    evidence_required: true
+    scoring_type: finance_ap_match
+    exact_amounts:
+    - expected_invoice_amount_cny
+    - over_billed_cny
+    required_findings:
+    - '480'
+  max_tokens: 8192
+  tags:
+  - ap
+  - tax
+  notes: 税额金额差异。
+- id: FIN-AP-003
+  domain: FINANCE_OFFICE
+  category: AP_THREE_WAY_MATCH
+  task_type: DATA_PROCESSING
+  complexity: MODERATE
+  prompt: 审核 AP-9003，重点检查供应商一致性。只输出 JSON。
+  input_context: '# 采购付款与三单匹配制度（Synthetic）
+
+
+    ## 三单匹配
+
+    - 合同、采购订单、发票、验收记录的供应商、金额、税率、币种必须一致。
+
+    - 按数量验收的采购，付款金额不得超过已验收数量对应金额。
+
+    - 发票金额超过合同/PO/验收可付款金额时，应拒绝付款或仅按可付款金额部分付款。
+
+
+    ## 付款条件
+
+    - 合同写明“验收后付款”的，必须有验收记录才可付款。
+
+    - 合同写明“签约预付款”的，可按合同约定比例付款。
+
+    - 供应商银行账户变更时，必须有供应商主数据变更审批。
+
+
+    ## 审批阈值
+
+    - 单笔付款 50,000 元以上需要财务经理审批。
+
+    - 单笔付款 100,000 元以上需要 CFO 审批。
+
+
+
+    三单匹配表 three_way_match.csv：
+
+    AP-9001 Huaxin Cloud: contract ex-tax 120000, VAT 6%, invoice inc-tax 63600, condition 50% after acceptance, accepted.
+
+    AP-9002 Anji Furniture: contract ex-tax 64000, VAT 13%, invoice inc-tax 72800, accepted 200/200 chairs.
+
+    AP-9003 Nanfang Tech: contract vendor is Nanfang Consulting, invoice vendor is Nanfang Tech, invoice inc-tax 53000.
+
+    AP-9004 Yida Hardware: 100 units at total ex-tax 98000, VAT 13%, accepted 96 units, invoice inc-tax 110740.
+
+    AP-9005 North Star SaaS: contract ex-tax 240000, VAT 6%, invoice inc-tax 63600, 25% signing prepayment, signed.
+
+    AP-9006 Donghai Logistics: ex-tax 30000, VAT 9%, invoice inc-tax 32700, not accepted.'
+  artifacts:
+  - artifacts/policies/ap_policy.md
+  - artifacts/ap/three_way_match.csv
+  output_format:
+    type: json
+    required_fields:
+    - decision
+    - amounts
+    - findings
+    - evidence
+    - confidence
+  expected_answer:
+    amounts:
+      payable_amount_cny: 0.0
+    required_findings:
+    - vendor_mismatch_Nanfang_Tech_vs_Nanfang_Consulting
+    decision: reject
+  evaluation:
+    primary: rule_based
+    numeric_tolerance: 0.01
+    penalize_hallucinated_findings: true
+    evidence_required: true
+    scoring_type: finance_ap_match
+    exact_amounts:
+    - payable_amount_cny
+    required_findings:
+    - vendor mismatch
+    - Nanfang
+  max_tokens: 8192
+  tags:
+  - ap
+  - vendor
+  notes: 供应商不一致。
+- id: FIN-AP-004
+  domain: FINANCE_OFFICE
+  category: AP_THREE_WAY_MATCH
+  task_type: DATA_PROCESSING
+  complexity: COMPLEX
+  prompt: 审核 AP-9004：按已验收数量计算可付款金额和超开金额。只输出 JSON。
+  input_context: '# 采购付款与三单匹配制度（Synthetic）
+
+
+    ## 三单匹配
+
+    - 合同、采购订单、发票、验收记录的供应商、金额、税率、币种必须一致。
+
+    - 按数量验收的采购，付款金额不得超过已验收数量对应金额。
+
+    - 发票金额超过合同/PO/验收可付款金额时，应拒绝付款或仅按可付款金额部分付款。
+
+
+    ## 付款条件
+
+    - 合同写明“验收后付款”的，必须有验收记录才可付款。
+
+    - 合同写明“签约预付款”的，可按合同约定比例付款。
+
+    - 供应商银行账户变更时，必须有供应商主数据变更审批。
+
+
+    ## 审批阈值
+
+    - 单笔付款 50,000 元以上需要财务经理审批。
+
+    - 单笔付款 100,000 元以上需要 CFO 审批。
+
+
+
+    三单匹配表 three_way_match.csv：
+
+    AP-9001 Huaxin Cloud: contract ex-tax 120000, VAT 6%, invoice inc-tax 63600, condition 50% after acceptance, accepted.
+
+    AP-9002 Anji Furniture: contract ex-tax 64000, VAT 13%, invoice inc-tax 72800, accepted 200/200 chairs.
+
+    AP-9003 Nanfang Tech: contract vendor is Nanfang Consulting, invoice vendor is Nanfang Tech, invoice inc-tax 53000.
+
+    AP-9004 Yida Hardware: 100 units at total ex-tax 98000, VAT 13%, accepted 96 units, invoice inc-tax 110740.
+
+    AP-9005 North Star SaaS: contract ex-tax 240000, VAT 6%, invoice inc-tax 63600, 25% signing prepayment, signed.
+
+    AP-9006 Donghai Logistics: ex-tax 30000, VAT 9%, invoice inc-tax 32700, not accepted.'
+  artifacts:
+  - artifacts/policies/ap_policy.md
+  - artifacts/ap/three_way_match.csv
+  output_format:
+    type: json
+    required_fields:
+    - decision
+    - amounts
+    - findings
+    - evidence
+    - confidence
+  expected_answer:
+    amounts:
+      payable_amount_cny: 106310.4
+      over_billed_cny: 4429.6
+    required_findings:
+    - accepted_96_of_100
+    decision: partial_approve
+  evaluation:
+    primary: rule_based
+    numeric_tolerance: 0.01
+    penalize_hallucinated_findings: true
+    evidence_required: true
+    scoring_type: finance_ap_match
+    exact_amounts:
+    - payable_amount_cny
+    - over_billed_cny
+    required_findings:
+    - '96'
+  max_tokens: 12288
+  tags:
+  - ap
+  - quantity
+  notes: 按验收数量付款。
+- id: FIN-AP-005
+  domain: FINANCE_OFFICE
+  category: AP_THREE_WAY_MATCH
+  task_type: DATA_PROCESSING
+  complexity: COMPLEX
+  prompt: 审核 AP-9005：签约预付款是否可支付？是否需要 CFO 审批？只输出 JSON。
+  input_context: '# 采购付款与三单匹配制度（Synthetic）
+
+
+    ## 三单匹配
+
+    - 合同、采购订单、发票、验收记录的供应商、金额、税率、币种必须一致。
+
+    - 按数量验收的采购，付款金额不得超过已验收数量对应金额。
+
+    - 发票金额超过合同/PO/验收可付款金额时，应拒绝付款或仅按可付款金额部分付款。
+
+
+    ## 付款条件
+
+    - 合同写明“验收后付款”的，必须有验收记录才可付款。
+
+    - 合同写明“签约预付款”的，可按合同约定比例付款。
+
+    - 供应商银行账户变更时，必须有供应商主数据变更审批。
+
+
+    ## 审批阈值
+
+    - 单笔付款 50,000 元以上需要财务经理审批。
+
+    - 单笔付款 100,000 元以上需要 CFO 审批。
+
+
+
+    三单匹配表 three_way_match.csv：
+
+    AP-9001 Huaxin Cloud: contract ex-tax 120000, VAT 6%, invoice inc-tax 63600, condition 50% after acceptance, accepted.
+
+    AP-9002 Anji Furniture: contract ex-tax 64000, VAT 13%, invoice inc-tax 72800, accepted 200/200 chairs.
+
+    AP-9003 Nanfang Tech: contract vendor is Nanfang Consulting, invoice vendor is Nanfang Tech, invoice inc-tax 53000.
+
+    AP-9004 Yida Hardware: 100 units at total ex-tax 98000, VAT 13%, accepted 96 units, invoice inc-tax 110740.
+
+    AP-9005 North Star SaaS: contract ex-tax 240000, VAT 6%, invoice inc-tax 63600, 25% signing prepayment, signed.
+
+    AP-9006 Donghai Logistics: ex-tax 30000, VAT 9%, invoice inc-tax 32700, not accepted.'
+  artifacts:
+  - artifacts/policies/ap_policy.md
+  - artifacts/ap/three_way_match.csv
+  output_format:
+    type: json
+    required_fields:
+    - decision
+    - amounts
+    - findings
+    - evidence
+    - confidence
+  expected_answer:
+    amounts:
+      payable_amount_cny: 63600.0
+    required_findings:
+    - 25_percent_signing_prepayment_allowed
+    - finance_manager_approval_required
+    - no_cfo_required_under_100000
+    decision: approve_with_approval
+  evaluation:
+    primary: rule_based
+    numeric_tolerance: 0.01
+    penalize_hallucinated_findings: true
+    evidence_required: true
+    scoring_type: finance_ap_match
+    exact_amounts:
+    - payable_amount_cny
+    required_findings:
+    - 25%
+    - '50000'
+  max_tokens: 12288
+  tags:
+  - ap
+  - prepayment
+  notes: 签约预付款。
+- id: FIN-AP-006
+  domain: FINANCE_OFFICE
+  category: AP_THREE_WAY_MATCH
+  task_type: DATA_PROCESSING
+  complexity: SIMPLE
+  prompt: 审核 AP-9006 是否可付款。只输出 JSON。
+  input_context: '# 采购付款与三单匹配制度（Synthetic）
+
+
+    ## 三单匹配
+
+    - 合同、采购订单、发票、验收记录的供应商、金额、税率、币种必须一致。
+
+    - 按数量验收的采购，付款金额不得超过已验收数量对应金额。
+
+    - 发票金额超过合同/PO/验收可付款金额时，应拒绝付款或仅按可付款金额部分付款。
+
+
+    ## 付款条件
+
+    - 合同写明“验收后付款”的，必须有验收记录才可付款。
+
+    - 合同写明“签约预付款”的，可按合同约定比例付款。
+
+    - 供应商银行账户变更时，必须有供应商主数据变更审批。
+
+
+    ## 审批阈值
+
+    - 单笔付款 50,000 元以上需要财务经理审批。
+
+    - 单笔付款 100,000 元以上需要 CFO 审批。
+
+
+
+    三单匹配表 three_way_match.csv：
+
+    AP-9001 Huaxin Cloud: contract ex-tax 120000, VAT 6%, invoice inc-tax 63600, condition 50% after acceptance, accepted.
+
+    AP-9002 Anji Furniture: contract ex-tax 64000, VAT 13%, invoice inc-tax 72800, accepted 200/200 chairs.
+
+    AP-9003 Nanfang Tech: contract vendor is Nanfang Consulting, invoice vendor is Nanfang Tech, invoice inc-tax 53000.
+
+    AP-9004 Yida Hardware: 100 units at total ex-tax 98000, VAT 13%, accepted 96 units, invoice inc-tax 110740.
+
+    AP-9005 North Star SaaS: contract ex-tax 240000, VAT 6%, invoice inc-tax 63600, 25% signing prepayment, signed.
+
+    AP-9006 Donghai Logistics: ex-tax 30000, VAT 9%, invoice inc-tax 32700, not accepted.'
+  artifacts:
+  - artifacts/policies/ap_policy.md
+  - artifacts/ap/three_way_match.csv
+  output_format:
+    type: json
+    required_fields:
+    - decision
+    - amounts
+    - findings
+    - evidence
+    - confidence
+  expected_answer:
+    amounts:
+      payable_amount_cny: 0.0
+    required_findings:
+    - not_accepted
+    decision: reject
+  evaluation:
+    primary: rule_based
+    numeric_tolerance: 0.01
+    penalize_hallucinated_findings: true
+    evidence_required: true
+    scoring_type: finance_ap_match
+    exact_amounts:
+    - payable_amount_cny
+    required_findings:
+    - not accepted
+  max_tokens: 8192
+  tags:
+  - ap
+  - acceptance
+  notes: 未验收拒付。
+- id: FIN-BANK-001
+  domain: FINANCE_OFFICE
+  category: BANK_RECONCILIATION
+  task_type: DATA_PROCESSING
+  complexity: SIMPLE
+  prompt: 找出银行流水中没有对应账簿记录的项目。只输出 JSON。
+  input_context: '银行流水 bank_statement_may.csv 与账簿 ledger_may.csv：
+
+    B-001 AR-8001 +150000 matches L-010.
+
+    B-002 AP-9001 -63600 matches L-011.
+
+    B-003 FEE-MAY -35 has no ledger entry.
+
+    B-004 TR-7788 -28000 matches L-012.
+
+    B-005 UNKNOWN +50000 has no ledger entry.
+
+    B-006 AP-9002 -72320; ledger L-013 records -72800.
+
+    B-007 and B-008 both OD-1122 -8800; ledger has one L-015 -8800.
+
+    Ledger L-014 TRN-0601 -12500 has no bank entry.'
+  artifacts:
+  - artifacts/bank/bank_statement_may.csv
+  - artifacts/bank/ledger_may.csv
+  output_format:
+    type: json
+    required_fields:
+    - decision
+    - amounts
+    - findings
+    - evidence
+    - confidence
+  expected_answer:
+    required_findings:
+    - B-003 bank fee -35
+    - B-005 unknown receipt 50000
+    - B-008 duplicate payment 8800
+    decision: flag
+  evaluation:
+    primary: rule_based
+    numeric_tolerance: 0.01
+    penalize_hallucinated_findings: true
+    evidence_required: true
+    scoring_type: finance_reconciliation
+    required_findings:
+    - B-003
+    - B-005
+    - B-008
+  max_tokens: 8192
+  tags:
+  - bank
+  - unmatched
+  notes: 未入账银行流水。
+- id: FIN-BANK-002
+  domain: FINANCE_OFFICE
+  category: BANK_RECONCILIATION
+  task_type: DATA_PROCESSING
+  complexity: MODERATE
+  prompt: 找出账簿中没有银行流水匹配的项目，并说明可能原因。只输出 JSON。
+  input_context: '银行流水 bank_statement_may.csv 与账簿 ledger_may.csv：
+
+    B-001 AR-8001 +150000 matches L-010.
+
+    B-002 AP-9001 -63600 matches L-011.
+
+    B-003 FEE-MAY -35 has no ledger entry.
+
+    B-004 TR-7788 -28000 matches L-012.
+
+    B-005 UNKNOWN +50000 has no ledger entry.
+
+    B-006 AP-9002 -72320; ledger L-013 records -72800.
+
+    B-007 and B-008 both OD-1122 -8800; ledger has one L-015 -8800.
+
+    Ledger L-014 TRN-0601 -12500 has no bank entry.'
+  artifacts:
+  - artifacts/bank/bank_statement_may.csv
+  - artifacts/bank/ledger_may.csv
+  output_format:
+    type: json
+    required_fields:
+    - decision
+    - amounts
+    - findings
+    - evidence
+    - confidence
+  expected_answer:
+    required_findings:
+    - L-014 outstanding payment -12500
+    decision: flag
+  evaluation:
+    primary: rule_based
+    numeric_tolerance: 0.01
+    penalize_hallucinated_findings: true
+    evidence_required: true
+    scoring_type: finance_reconciliation
+    required_findings:
+    - L-014
+    - '12500'
+  max_tokens: 8192
+  tags:
+  - bank
+  - outstanding
+  notes: 账簿未达账项。
+- id: FIN-BANK-003
+  domain: FINANCE_OFFICE
+  category: BANK_RECONCILIATION
+  task_type: DATA_PROCESSING
+  complexity: MODERATE
+  prompt: 检查 AP-9002 的银行付款和账簿金额差异。只输出 JSON。
+  input_context: '银行流水 bank_statement_may.csv 与账簿 ledger_may.csv：
+
+    B-001 AR-8001 +150000 matches L-010.
+
+    B-002 AP-9001 -63600 matches L-011.
+
+    B-003 FEE-MAY -35 has no ledger entry.
+
+    B-004 TR-7788 -28000 matches L-012.
+
+    B-005 UNKNOWN +50000 has no ledger entry.
+
+    B-006 AP-9002 -72320; ledger L-013 records -72800.
+
+    B-007 and B-008 both OD-1122 -8800; ledger has one L-015 -8800.
+
+    Ledger L-014 TRN-0601 -12500 has no bank entry.'
+  artifacts:
+  - artifacts/bank/bank_statement_may.csv
+  - artifacts/bank/ledger_may.csv
+  output_format:
+    type: json
+    required_fields:
+    - decision
+    - amounts
+    - findings
+    - evidence
+    - confidence
+  expected_answer:
+    amounts:
+      bank_amount_cny: -72320.0
+      ledger_amount_cny: -72800.0
+      difference_cny: 480.0
+    required_findings:
+    - AP-9002 amount_mismatch_480
+    decision: flag
+  evaluation:
+    primary: rule_based
+    numeric_tolerance: 0.01
+    penalize_hallucinated_findings: true
+    evidence_required: true
+    scoring_type: finance_reconciliation
+    exact_amounts:
+    - difference_cny
+    required_findings:
+    - '480'
+  max_tokens: 8192
+  tags:
+  - bank
+  - mismatch
+  notes: 金额差异。
+- id: FIN-BANK-004
+  domain: FINANCE_OFFICE
+  category: BANK_RECONCILIATION
+  task_type: DATA_PROCESSING
+  complexity: COMPLEX
+  prompt: 找出疑似重复付款，并给出重复风险金额。只输出 JSON。
+  input_context: '银行流水 bank_statement_may.csv 与账簿 ledger_may.csv：
+
+    B-001 AR-8001 +150000 matches L-010.
+
+    B-002 AP-9001 -63600 matches L-011.
+
+    B-003 FEE-MAY -35 has no ledger entry.
+
+    B-004 TR-7788 -28000 matches L-012.
+
+    B-005 UNKNOWN +50000 has no ledger entry.
+
+    B-006 AP-9002 -72320; ledger L-013 records -72800.
+
+    B-007 and B-008 both OD-1122 -8800; ledger has one L-015 -8800.
+
+    Ledger L-014 TRN-0601 -12500 has no bank entry.'
+  artifacts:
+  - artifacts/bank/bank_statement_may.csv
+  - artifacts/bank/ledger_may.csv
+  output_format:
+    type: json
+    required_fields:
+    - decision
+    - amounts
+    - findings
+    - evidence
+    - confidence
+  expected_answer:
+    amounts:
+      duplicate_payment_risk_cny: 8800.0
+    required_findings:
+    - B-007 and B-008 duplicate OD-1122
+    decision: flag
+  evaluation:
+    primary: rule_based
+    numeric_tolerance: 0.01
+    penalize_hallucinated_findings: true
+    evidence_required: true
+    scoring_type: finance_reconciliation
+    exact_amounts:
+    - duplicate_payment_risk_cny
+    required_findings:
+    - OD-1122
+    - '8800'
+  max_tokens: 12288
+  tags:
+  - bank
+  - duplicate_payment
+  notes: 重复付款。
+- id: FIN-BANK-005
+  domain: FINANCE_OFFICE
+  category: BANK_RECONCILIATION
+  task_type: DATA_PROCESSING
+  complexity: COMPLEX
+  prompt: 生成 2026-05 银行余额调节差异清单，包含银行未入账、账簿未达、金额不一致、重复付款四类。只输出 JSON。
+  input_context: '银行流水 bank_statement_may.csv 与账簿 ledger_may.csv：
+
+    B-001 AR-8001 +150000 matches L-010.
+
+    B-002 AP-9001 -63600 matches L-011.
+
+    B-003 FEE-MAY -35 has no ledger entry.
+
+    B-004 TR-7788 -28000 matches L-012.
+
+    B-005 UNKNOWN +50000 has no ledger entry.
+
+    B-006 AP-9002 -72320; ledger L-013 records -72800.
+
+    B-007 and B-008 both OD-1122 -8800; ledger has one L-015 -8800.
+
+    Ledger L-014 TRN-0601 -12500 has no bank entry.'
+  artifacts:
+  - artifacts/bank/bank_statement_may.csv
+  - artifacts/bank/ledger_may.csv
+  output_format:
+    type: json
+    required_fields:
+    - decision
+    - amounts
+    - findings
+    - evidence
+    - confidence
+  expected_answer:
+    required_findings:
+    - B-003
+    - B-005
+    - L-014
+    - AP-9002 difference 480
+    - OD-1122 duplicate
+    decision: summarize
+  evaluation:
+    primary: rule_based
+    numeric_tolerance: 0.01
+    penalize_hallucinated_findings: true
+    evidence_required: true
+    scoring_type: finance_reconciliation
+    required_findings:
+    - B-003
+    - B-005
+    - L-014
+    - '480'
+    - OD-1122
+  max_tokens: 12288
+  tags:
+  - bank
+  - summary
+  notes: 多类别调节。
+- id: FIN-BANK-006
+  domain: FINANCE_OFFICE
+  category: BANK_RECONCILIATION
+  task_type: DATA_PROCESSING
+  complexity: EXPERT
+  prompt: 如果只允许优先处理 3 个风险最高的对账差异，请按金额和风险排序，并说明处理动作。只输出 JSON。
+  input_context: '银行流水 bank_statement_may.csv 与账簿 ledger_may.csv：
+
+    B-001 AR-8001 +150000 matches L-010.
+
+    B-002 AP-9001 -63600 matches L-011.
+
+    B-003 FEE-MAY -35 has no ledger entry.
+
+    B-004 TR-7788 -28000 matches L-012.
+
+    B-005 UNKNOWN +50000 has no ledger entry.
+
+    B-006 AP-9002 -72320; ledger L-013 records -72800.
+
+    B-007 and B-008 both OD-1122 -8800; ledger has one L-015 -8800.
+
+    Ledger L-014 TRN-0601 -12500 has no bank entry.'
+  artifacts:
+  - artifacts/bank/bank_statement_may.csv
+  - artifacts/bank/ledger_may.csv
+  output_format:
+    type: json
+    required_fields:
+    - decision
+    - amounts
+    - findings
+    - evidence
+    - confidence
+  expected_answer:
+    required_findings:
+    - B-005 unknown receipt 50000
+    - L-014 outstanding payment 12500
+    - OD-1122 duplicate payment 8800
+    decision: prioritize
+  evaluation:
+    primary: rule_based
+    numeric_tolerance: 0.01
+    penalize_hallucinated_findings: true
+    evidence_required: true
+    scoring_type: finance_reconciliation_priority
+    required_findings:
+    - '50000'
+    - '12500'
+    - '8800'
+  max_tokens: 12288
+  tags:
+  - bank
+  - prioritization
+  notes: 风险优先级排序。
+- id: FIN-BUD-001
+  domain: FINANCE_OFFICE
+  category: BUDGET_VARIANCE
+  task_type: DATA_PROCESSING
+  complexity: SIMPLE
+  prompt: 计算所有预算项的总预算、总实际和总超支金额。只输出 JSON。
+  input_context: '预算表 budget_actual_may.csv：
+
+    Sales Travel budget 80000 actual 98000.
+
+    Sales Entertainment budget 35000 actual 52000.
+
+    R&D Cloud budget 120000 actual 168000.
+
+    R&D Training budget 20000 actual 12000.
+
+    Finance Software budget 30000 actual 34000.
+
+    HR Recruitment budget 15000 actual 26000.
+
+    Operations Logistics budget 90000 actual 87000.
+
+    IT Hardware budget 50000 actual 64500.
+
+    预算制度：超预算率 > 10% 且超预算金额 > 10000 需要预算调整说明；超预算率 > 30% 为高风险异常。'
+  artifacts:
+  - artifacts/budget/budget_actual_may.csv
+  - artifacts/policies/budget_policy.md
+  output_format:
+    type: json
+    required_fields:
+    - decision
+    - amounts
+    - findings
+    - evidence
+    - confidence
+  expected_answer:
+    amounts:
+      total_budget_cny: 440000.0
+      total_actual_cny: 541500.0
+      total_overspend_cny: 101500.0
+    decision: calculate
+  evaluation:
+    primary: rule_based
+    numeric_tolerance: 0.01
+    penalize_hallucinated_findings: true
+    evidence_required: true
+    scoring_type: finance_budget
+    exact_amounts:
+    - total_budget_cny
+    - total_actual_cny
+    - total_overspend_cny
+  max_tokens: 8192
+  tags:
+  - budget
+  - sum
+  notes: 预算总览。
+- id: FIN-BUD-002
+  domain: FINANCE_OFFICE
+  category: BUDGET_VARIANCE
+  task_type: DATA_PROCESSING
+  complexity: MODERATE
+  prompt: 找出前三大绝对超支项，按超支金额降序。只输出 JSON。
+  input_context: '预算表 budget_actual_may.csv：
+
+    Sales Travel budget 80000 actual 98000.
+
+    Sales Entertainment budget 35000 actual 52000.
+
+    R&D Cloud budget 120000 actual 168000.
+
+    R&D Training budget 20000 actual 12000.
+
+    Finance Software budget 30000 actual 34000.
+
+    HR Recruitment budget 15000 actual 26000.
+
+    Operations Logistics budget 90000 actual 87000.
+
+    IT Hardware budget 50000 actual 64500.
+
+    预算制度：超预算率 > 10% 且超预算金额 > 10000 需要预算调整说明；超预算率 > 30% 为高风险异常。'
+  artifacts:
+  - artifacts/budget/budget_actual_may.csv
+  output_format:
+    type: json
+    required_fields:
+    - decision
+    - amounts
+    - findings
+    - evidence
+    - confidence
+  expected_answer:
+    top_items:
+    - dept: R&D
+      category: Cloud
+      variance_cny: 48000.0
+    - dept: Sales
+      category: Travel
+      variance_cny: 18000.0
+    - dept: Sales
+      category: Entertainment
+      variance_cny: 17000.0
+    decision: rank
+  evaluation:
+    primary: rule_based
+    numeric_tolerance: 0.01
+    penalize_hallucinated_findings: true
+    evidence_required: true
+    scoring_type: finance_budget_rank
+    required_findings:
+    - R&D Cloud 48000
+    - Sales Travel 18000
+    - Sales Entertainment 17000
+  max_tokens: 8192
+  tags:
+  - budget
+  - rank
+  notes: Top 3 超支。
+- id: FIN-BUD-003
+  domain: FINANCE_OFFICE
+  category: BUDGET_VARIANCE
+  task_type: DATA_PROCESSING
+  complexity: MODERATE
+  prompt: 根据预算制度，找出需要提交预算调整说明的项目。只输出 JSON。
+  input_context: '预算表 budget_actual_may.csv：
+
+    Sales Travel budget 80000 actual 98000.
+
+    Sales Entertainment budget 35000 actual 52000.
+
+    R&D Cloud budget 120000 actual 168000.
+
+    R&D Training budget 20000 actual 12000.
+
+    Finance Software budget 30000 actual 34000.
+
+    HR Recruitment budget 15000 actual 26000.
+
+    Operations Logistics budget 90000 actual 87000.
+
+    IT Hardware budget 50000 actual 64500.
+
+    预算制度：超预算率 > 10% 且超预算金额 > 10000 需要预算调整说明；超预算率 > 30% 为高风险异常。'
+  artifacts:
+  - artifacts/budget/budget_actual_may.csv
+  - artifacts/policies/budget_policy.md
+  output_format:
+    type: json
+    required_fields:
+    - decision
+    - amounts
+    - findings
+    - evidence
+    - confidence
+  expected_answer:
+    required_findings:
+    - Sales Travel
+    - Sales Entertainment
+    - R&D Cloud
+    - HR Recruitment
+    - IT Hardware
+    decision: flag
+  evaluation:
+    primary: rule_based
+    numeric_tolerance: 0.01
+    penalize_hallucinated_findings: true
+    evidence_required: true
+    scoring_type: finance_budget_policy
+    required_findings:
+    - Sales Travel
+    - Sales Entertainment
+    - R&D Cloud
+    - HR Recruitment
+    - IT Hardware
+  max_tokens: 8192
+  tags:
+  - budget
+  - policy
+  notes: 双阈值制度判断。
+- id: FIN-BUD-004
+  domain: FINANCE_OFFICE
+  category: BUDGET_VARIANCE
+  task_type: DATA_PROCESSING
+  complexity: MODERATE
+  prompt: 找出高风险预算异常项（超预算率 > 30%），并给出超预算率。只输出 JSON。
+  input_context: '预算表 budget_actual_may.csv：
+
+    Sales Travel budget 80000 actual 98000.
+
+    Sales Entertainment budget 35000 actual 52000.
+
+    R&D Cloud budget 120000 actual 168000.
+
+    R&D Training budget 20000 actual 12000.
+
+    Finance Software budget 30000 actual 34000.
+
+    HR Recruitment budget 15000 actual 26000.
+
+    Operations Logistics budget 90000 actual 87000.
+
+    IT Hardware budget 50000 actual 64500.
+
+    预算制度：超预算率 > 10% 且超预算金额 > 10000 需要预算调整说明；超预算率 > 30% 为高风险异常。'
+  artifacts:
+  - artifacts/budget/budget_actual_may.csv
+  - artifacts/policies/budget_policy.md
+  output_format:
+    type: json
+    required_fields:
+    - decision
+    - amounts
+    - findings
+    - evidence
+    - confidence
+  expected_answer:
+    required_findings:
+    - Sales Entertainment 48.57%
+    - R&D Cloud 40.00%
+    - HR Recruitment 73.33%
+    decision: flag
+  evaluation:
+    primary: rule_based
+    numeric_tolerance: 0.01
+    penalize_hallucinated_findings: true
+    evidence_required: true
+    scoring_type: finance_budget_policy
+    required_findings:
+    - '48.57'
+    - '40'
+    - '73.33'
+  max_tokens: 8192
+  tags:
+  - budget
+  - high_risk
+  notes: 高风险异常率。
+- id: FIN-BUD-005
+  domain: FINANCE_OFFICE
+  category: BUDGET_VARIANCE
+  task_type: DATA_PROCESSING
+  complexity: COMPLEX
+  prompt: 写一份 JSON 化预算分析摘要：列出主要超支原因假设和建议动作，但必须基于表中 owner_note，不得编造。只输出 JSON。
+  input_context: '预算表 budget_actual_may.csv：
+
+    Sales Travel budget 80000 actual 98000.
+
+    Sales Entertainment budget 35000 actual 52000.
+
+    R&D Cloud budget 120000 actual 168000.
+
+    R&D Training budget 20000 actual 12000.
+
+    Finance Software budget 30000 actual 34000.
+
+    HR Recruitment budget 15000 actual 26000.
+
+    Operations Logistics budget 90000 actual 87000.
+
+    IT Hardware budget 50000 actual 64500.
+
+    预算制度：超预算率 > 10% 且超预算金额 > 10000 需要预算调整说明；超预算率 > 30% 为高风险异常。'
+  artifacts:
+  - artifacts/budget/budget_actual_may.csv
+  output_format:
+    type: json
+    required_fields:
+    - decision
+    - amounts
+    - findings
+    - evidence
+    - confidence
+  expected_answer:
+    required_findings:
+    - R&D Cloud model experiments
+    - Sales customer visits or distributor campaign
+    - HR campus fair
+    decision: summarize
+  evaluation:
+    primary: rule_based
+    numeric_tolerance: 0.01
+    penalize_hallucinated_findings: true
+    evidence_required: true
+    scoring_type: finance_budget_explanation
+    required_findings:
+    - model experiments
+    - customer visits
+    - campus fair
+    forbidden_findings:
+    - macroeconomic
+    - exchange rate
+  max_tokens: 12288
+  tags:
+  - budget
+  - analysis
+  notes: 解释质量但要求证据约束。
+- id: FIN-BUD-006
+  domain: FINANCE_OFFICE
+  category: BUDGET_VARIANCE
+  task_type: DATA_PROCESSING
+  complexity: EXPERT
+  prompt: 结合预算制度，给 CFO 输出一份机器可读的预算风险清单：高风险/中风险/无需动作三类，并给金额影响。只输出 JSON。
+  input_context: '预算表 budget_actual_may.csv：
+
+    Sales Travel budget 80000 actual 98000.
+
+    Sales Entertainment budget 35000 actual 52000.
+
+    R&D Cloud budget 120000 actual 168000.
+
+    R&D Training budget 20000 actual 12000.
+
+    Finance Software budget 30000 actual 34000.
+
+    HR Recruitment budget 15000 actual 26000.
+
+    Operations Logistics budget 90000 actual 87000.
+
+    IT Hardware budget 50000 actual 64500.
+
+    预算制度：超预算率 > 10% 且超预算金额 > 10000 需要预算调整说明；超预算率 > 30% 为高风险异常。'
+  artifacts:
+  - artifacts/budget/budget_actual_may.csv
+  - artifacts/policies/budget_policy.md
+  output_format:
+    type: json
+    required_fields:
+    - decision
+    - amounts
+    - findings
+    - evidence
+    - confidence
+  expected_answer:
+    required_findings:
+    - 'high: Sales Entertainment'
+    - 'high: R&D Cloud'
+    - 'high: HR Recruitment'
+    - 'medium: Sales Travel'
+    - 'medium: IT Hardware'
+    decision: classify
+  evaluation:
+    primary: rule_based
+    numeric_tolerance: 0.01
+    penalize_hallucinated_findings: true
+    evidence_required: true
+    scoring_type: finance_budget_risk
+    required_findings:
+    - Sales Entertainment
+    - R&D Cloud
+    - HR Recruitment
+    - Sales Travel
+    - IT Hardware
+  max_tokens: 12288
+  tags:
+  - budget
+  - risk
+  notes: 预算风险分级。
+- id: FIN-POL-001
+  domain: FINANCE_OFFICE
+  category: POLICY_QA
+  task_type: DATA_PROCESSING
+  complexity: SIMPLE
+  prompt: 员工在北京住宿 680 元/晚，发票抬头合规。根据制度最多可报多少？只输出 JSON。
+  input_context: '# 差旅及费用报销制度（Synthetic）
+
+
+    适用范围：员工差旅、客户拜访、培训及项目执行费用报销。
+
+
+    ## 发票与时限
+
+    - 发票抬头必须为“广州视源电子科技股份有限公司”，个人抬头不可报销。
+
+    - 报销应在费用发生后 30 天内提交，逾期需部门负责人审批；本 benchmark 中无审批附件时按不可报销处理。
+
+    - 同一发票号码不得重复报销。
+
+
+    ## 住宿
+
+    - 一线城市（北京、上海、广州、深圳）住宿标准上限为 600 元/晚。
+
+    - 其他城市住宿标准上限为 450 元/晚。
+
+    - 超出标准部分不可报销。
+
+
+    ## 餐费
+
+    - 员工个人餐费上限为 120 元/人/天。
+
+    - 客户招待餐费上限为 200 元/人/次，必须填写客户人数和业务目的。
+
+    - 酒水、私人聚餐不可报销。
+
+
+    ## 交通
+
+    - 市内出租车单次 100 元以内可直接报销，超过 100 元需说明路线并经主管审批；无审批附件时超出部分不可报销。
+
+    - 机票仅报销经济舱。发票抬头不合规时整笔机票不可报销。'
+  artifacts:
+  - artifacts/policies/travel_policy.md
+  output_format:
+    type: json
+    required_fields:
+    - decision
+    - amounts
+    - findings
+    - evidence
+    - confidence
+  expected_answer:
+    amounts:
+      approved_amount_cny: 600.0
+      rejected_amount_cny: 80.0
+    required_findings:
+    - Beijing tier1 cap 600
+    decision: partial_approve
+  evaluation:
+    primary: rule_based
+    numeric_tolerance: 0.01
+    penalize_hallucinated_findings: true
+    evidence_required: true
+    scoring_type: finance_policy_qa
+    exact_amounts:
+    - approved_amount_cny
+    - rejected_amount_cny
+    required_findings:
+    - '600'
+  max_tokens: 8192
+  tags:
+  - policy
+  - qa
+  notes: 制度问答。
+- id: FIN-POL-002
+  domain: FINANCE_OFFICE
+  category: POLICY_QA
+  task_type: DATA_PROCESSING
+  complexity: SIMPLE
+  prompt: 机票发票抬头是员工个人姓名，是否可以报销？只输出 JSON。
+  input_context: '# 差旅及费用报销制度（Synthetic）
+
+
+    适用范围：员工差旅、客户拜访、培训及项目执行费用报销。
+
+
+    ## 发票与时限
+
+    - 发票抬头必须为“广州视源电子科技股份有限公司”，个人抬头不可报销。
+
+    - 报销应在费用发生后 30 天内提交，逾期需部门负责人审批；本 benchmark 中无审批附件时按不可报销处理。
+
+    - 同一发票号码不得重复报销。
+
+
+    ## 住宿
+
+    - 一线城市（北京、上海、广州、深圳）住宿标准上限为 600 元/晚。
+
+    - 其他城市住宿标准上限为 450 元/晚。
+
+    - 超出标准部分不可报销。
+
+
+    ## 餐费
+
+    - 员工个人餐费上限为 120 元/人/天。
+
+    - 客户招待餐费上限为 200 元/人/次，必须填写客户人数和业务目的。
+
+    - 酒水、私人聚餐不可报销。
+
+
+    ## 交通
+
+    - 市内出租车单次 100 元以内可直接报销，超过 100 元需说明路线并经主管审批；无审批附件时超出部分不可报销。
+
+    - 机票仅报销经济舱。发票抬头不合规时整笔机票不可报销。'
+  artifacts:
+  - artifacts/policies/travel_policy.md
+  output_format:
+    type: json
+    required_fields:
+    - decision
+    - amounts
+    - findings
+    - evidence
+    - confidence
+  expected_answer:
+    amounts:
+      approved_amount_cny: 0.0
+    required_findings:
+    - personal invoice title not reimbursable
+    decision: reject
+  evaluation:
+    primary: rule_based
+    numeric_tolerance: 0.01
+    penalize_hallucinated_findings: true
+    evidence_required: true
+    scoring_type: finance_policy_qa
+    exact_amounts:
+    - approved_amount_cny
+    required_findings:
+    - 个人抬头
+    - 不可报销
+  max_tokens: 8192
+  tags:
+  - policy
+  - invoice_title
+  notes: 个人抬头。
+- id: FIN-POL-003
+  domain: FINANCE_OFFICE
+  category: POLICY_QA
+  task_type: DATA_PROCESSING
+  complexity: MODERATE
+  prompt: 供应商银行账户变更但没有主数据变更审批，付款申请能否放行？只输出 JSON。
+  input_context: '# 采购付款与三单匹配制度（Synthetic）
+
+
+    ## 三单匹配
+
+    - 合同、采购订单、发票、验收记录的供应商、金额、税率、币种必须一致。
+
+    - 按数量验收的采购，付款金额不得超过已验收数量对应金额。
+
+    - 发票金额超过合同/PO/验收可付款金额时，应拒绝付款或仅按可付款金额部分付款。
+
+
+    ## 付款条件
+
+    - 合同写明“验收后付款”的，必须有验收记录才可付款。
+
+    - 合同写明“签约预付款”的，可按合同约定比例付款。
+
+    - 供应商银行账户变更时，必须有供应商主数据变更审批。
+
+
+    ## 审批阈值
+
+    - 单笔付款 50,000 元以上需要财务经理审批。
+
+    - 单笔付款 100,000 元以上需要 CFO 审批。'
+  artifacts:
+  - artifacts/policies/ap_policy.md
+  output_format:
+    type: json
+    required_fields:
+    - decision
+    - amounts
+    - findings
+    - evidence
+    - confidence
+  expected_answer:
+    amounts:
+      payable_amount_cny: 0.0
+    required_findings:
+    - vendor_master_change_approval_required
+    decision: reject
+  evaluation:
+    primary: rule_based
+    numeric_tolerance: 0.01
+    penalize_hallucinated_findings: true
+    evidence_required: true
+    scoring_type: finance_policy_qa
+    exact_amounts:
+    - payable_amount_cny
+    required_findings:
+    - 供应商主数据
+    - 审批
+  max_tokens: 8192
+  tags:
+  - policy
+  - vendor_master
+  notes: 供应商账户变更。
+- id: FIN-POL-004
+  domain: FINANCE_OFFICE
+  category: POLICY_QA
+  task_type: DATA_PROCESSING
+  complexity: MODERATE
+  prompt: 单笔付款 120000 元，三单匹配无误。需要哪些审批？只输出 JSON。
+  input_context: '# 采购付款与三单匹配制度（Synthetic）
+
+
+    ## 三单匹配
+
+    - 合同、采购订单、发票、验收记录的供应商、金额、税率、币种必须一致。
+
+    - 按数量验收的采购，付款金额不得超过已验收数量对应金额。
+
+    - 发票金额超过合同/PO/验收可付款金额时，应拒绝付款或仅按可付款金额部分付款。
+
+
+    ## 付款条件
+
+    - 合同写明“验收后付款”的，必须有验收记录才可付款。
+
+    - 合同写明“签约预付款”的，可按合同约定比例付款。
+
+    - 供应商银行账户变更时，必须有供应商主数据变更审批。
+
+
+    ## 审批阈值
+
+    - 单笔付款 50,000 元以上需要财务经理审批。
+
+    - 单笔付款 100,000 元以上需要 CFO 审批。'
+  artifacts:
+  - artifacts/policies/ap_policy.md
+  output_format:
+    type: json
+    required_fields:
+    - decision
+    - amounts
+    - findings
+    - evidence
+    - confidence
+  expected_answer:
+    required_findings:
+    - finance_manager_approval
+    - cfo_approval
+    decision: approve_with_approval
+  evaluation:
+    primary: rule_based
+    numeric_tolerance: 0.01
+    penalize_hallucinated_findings: true
+    evidence_required: true
+    scoring_type: finance_policy_qa
+    required_findings:
+    - 财务经理
+    - CFO
+  max_tokens: 8192
+  tags:
+  - policy
+  - approval
+  notes: 审批阈值。
+- id: FIN-POL-005
+  domain: FINANCE_OFFICE
+  category: POLICY_QA
+  task_type: DATA_PROCESSING
+  complexity: MODERATE
+  prompt: 预算项目超支 9000 元，超预算率 20%。是否必须提交预算调整说明？只输出 JSON。
+  input_context: '# 预算控制制度（Synthetic）
+
+
+    - 预算执行差异同时满足“超预算率 > 10%”且“超预算金额 > 10,000 元”时，必须提交预算调整说明。
+
+    - 单项费用超预算率 > 30% 视为高风险异常。
+
+    - 预算分析报告必须列出前三大超支项、原因假设和建议动作。'
+  artifacts:
+  - artifacts/policies/budget_policy.md
+  output_format:
+    type: json
+    required_fields:
+    - decision
+    - amounts
+    - findings
+    - evidence
+    - confidence
+  expected_answer:
+    required_findings:
+    - not_required_because_amount_not_over_10000
+    decision: no_action_required
+  evaluation:
+    primary: rule_based
+    numeric_tolerance: 0.01
+    penalize_hallucinated_findings: true
+    evidence_required: true
+    scoring_type: finance_policy_qa
+    required_findings:
+    - '10000'
+    - 不需要
+  max_tokens: 8192
+  tags:
+  - policy
+  - budget
+  notes: 双条件阈值的反例。
+- id: FIN-POL-006
+  domain: FINANCE_OFFICE
+  category: POLICY_QA
+  task_type: DATA_PROCESSING
+  complexity: COMPLEX
+  prompt: 根据三份制度，总结一个财务助手在审批前必须检查的 8 个硬约束。只输出 JSON 数组，不要自由发挥。
+  input_context: '# 差旅及费用报销制度（Synthetic）
+
+
+    适用范围：员工差旅、客户拜访、培训及项目执行费用报销。
+
+
+    ## 发票与时限
+
+    - 发票抬头必须为“广州视源电子科技股份有限公司”，个人抬头不可报销。
+
+    - 报销应在费用发生后 30 天内提交，逾期需部门负责人审批；本 benchmark 中无审批附件时按不可报销处理。
+
+    - 同一发票号码不得重复报销。
+
+
+    ## 住宿
+
+    - 一线城市（北京、上海、广州、深圳）住宿标准上限为 600 元/晚。
+
+    - 其他城市住宿标准上限为 450 元/晚。
+
+    - 超出标准部分不可报销。
+
+
+    ## 餐费
+
+    - 员工个人餐费上限为 120 元/人/天。
+
+    - 客户招待餐费上限为 200 元/人/次，必须填写客户人数和业务目的。
+
+    - 酒水、私人聚餐不可报销。
+
+
+    ## 交通
+
+    - 市内出租车单次 100 元以内可直接报销，超过 100 元需说明路线并经主管审批；无审批附件时超出部分不可报销。
+
+    - 机票仅报销经济舱。发票抬头不合规时整笔机票不可报销。
+
+
+
+    # 采购付款与三单匹配制度（Synthetic）
+
+
+    ## 三单匹配
+
+    - 合同、采购订单、发票、验收记录的供应商、金额、税率、币种必须一致。
+
+    - 按数量验收的采购，付款金额不得超过已验收数量对应金额。
+
+    - 发票金额超过合同/PO/验收可付款金额时，应拒绝付款或仅按可付款金额部分付款。
+
+
+    ## 付款条件
+
+    - 合同写明“验收后付款”的，必须有验收记录才可付款。
+
+    - 合同写明“签约预付款”的，可按合同约定比例付款。
+
+    - 供应商银行账户变更时，必须有供应商主数据变更审批。
+
+
+    ## 审批阈值
+
+    - 单笔付款 50,000 元以上需要财务经理审批。
+
+    - 单笔付款 100,000 元以上需要 CFO 审批。
+
+
+
+    # 预算控制制度（Synthetic）
+
+
+    - 预算执行差异同时满足“超预算率 > 10%”且“超预算金额 > 10,000 元”时，必须提交预算调整说明。
+
+    - 单项费用超预算率 > 30% 视为高风险异常。
+
+    - 预算分析报告必须列出前三大超支项、原因假设和建议动作。'
+  artifacts:
+  - artifacts/policies/travel_policy.md
+  - artifacts/policies/ap_policy.md
+  - artifacts/policies/budget_policy.md
+  output_format:
+    type: json
+    required_fields:
+    - decision
+    - amounts
+    - findings
+    - evidence
+    - confidence
+  expected_answer:
+    required_findings:
+    - invoice title
+    - duplicate invoice
+    - hotel cap
+    - meal cap
+    - acceptance before payment
+    - vendor consistency
+    - payment approval threshold
+    - budget variance threshold
+    decision: summarize
+  evaluation:
+    primary: rule_based
+    numeric_tolerance: 0.01
+    penalize_hallucinated_findings: true
+    evidence_required: true
+    scoring_type: finance_policy_summary
+    required_findings:
+    - 发票抬头
+    - 重复发票
+    - 住宿
+    - 餐费
+    - 验收
+    - 供应商
+    - 审批
+    - 预算
+  max_tokens: 12288
+  tags:
+  - policy
+  - summary
+  notes: 制度摘要和硬约束提取。

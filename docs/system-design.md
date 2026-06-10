@@ -744,7 +744,7 @@ Prompt Caching不是所有模型都支持，也不是"默认节省60%"。缓存�
 **模型缓存能力配置（models.yaml）：**
 
 ```yaml
-# 以下配置值为MVP初始估计，需Week 1实测API后校准
+# 模型价格以 data/models.yaml 中的 CCH 后台用量日志校准价为准
 models:
   - name: "deepseek-v4-flash"
     supports_prompt_caching: true           # DeepSeek官方API支持Context Caching（待Week 1实测确认）
@@ -768,7 +768,7 @@ models:
     # 验证后改为 true/false
 ```
 
-> **模型名称与价格以 models.yaml 的实际可调用配置为准，表中名称为MVP角色占位。** Prompt Caching参数为基于官方文档的初始估计，需Week 1通过实际API调用验证。
+> **模型名称与价格以 models.yaml 的实际可调用配置为准。** 当前价格已用 CCH usage CSV 对账校准；Prompt Caching 参数仍需按更长上下文和多轮调用继续验证。
 
 > **`unknown`处理规则：** MVP阶段`supports_prompt_caching: unknown`按`false`处理，不计算缓存收益。验证后改为`true`或`false`。这样成本预估偏保守，不会高估节省。
 
@@ -1328,9 +1328,9 @@ Benchmark不追求"大而全"，而是分阶段、可控、有说服力。核心
 
 | 层级 | 调用量 | 目的 |
 |------|--------|------|
-| Level 1 | 0次 | 验证路由引擎逻辑（100条离线规则测试） |
-| Level 2 | ~115次 | 真实对比模型表现（30条核心用例 × 3-5模型） |
-| Level 3 | 复用Level 2 | 证明路由策略有效（策略回测，0额外调用） |
+| Level 1 | 0次 | 验证路由引擎逻辑（40条离线规则测试） |
+| Level 2 | ~150次 | 真实对比模型表现（30条核心用例 × 5模型） |
+| Level 3 | 0次 | 策略回测：L1+L2 case 纯成本模拟 + 降级分类（quality_mode: routing_prior） |
 | Context Rot验证 | ~27次 | 上下文长度对比实验（3×3×3） |
 | 交叉验证 | ~10次 | 检验LLM-as-Judge偏见 |
 
@@ -1340,7 +1340,7 @@ Benchmark不追求"大而全"，而是分阶段、可控、有说服力。核心
 
 **目的：** 验证路由引擎本身——分类器、特征提取器、策略选择器的逻辑是否正确。
 
-**测试集：** 100条带标注的任务描述，每条包含期望输出。
+**测试集：** 40条带标注的任务描述，每条包含期望输出。
 
 ```python
 LEVEL_1_TEST_CASES = [
@@ -1368,7 +1368,7 @@ LEVEL_1_TEST_CASES = [
         "expected_allowed_tiers": [1, 2],
         "expected_strategy_candidates": ["PLAN_EXECUTE", "GUIDED_EXECUTE", "SINGLE_MODEL"],
     },
-    # ... 100条
+    # ... 40条
 ]
 ```
 
@@ -1387,7 +1387,7 @@ LEVEL_1_TEST_CASES = [
 
 ---
 
-### 6.2 Level 2：小样本模型质量Benchmark（~115次API调用）
+### 6.2 Level 2：小样本模型质量Benchmark（~150次API调用）
 
 **目的：** 真实对比不同Tier模型的表现，建立任务-模型适配矩阵。
 
@@ -1402,13 +1402,13 @@ LEVEL_1_TEST_CASES = [
 | 重构 | 4条 | 2 提取方法 + 2 模式应用 |
 | 架构设计 | 4条 | 2 MODERATE + 2 EXPERT |
 
-**模型选择：每Tier 1个代表模型 + 补充横评**
+**模型选择：全部 5 个 CCH 模型**
 
 | 测试 | 模型 | 调用量 |
 |------|------|--------|
-| 主测试 | qwen3.7-max (T1) + qwen3.7-plus (T2) + deepseek-v4-flash (T3) | 30 × 3 = 90次 |
-| 补充横评 | 全部5个模型跑5条最有代表性的case | 5 × 5 = 25次 |
-| **合计** | | **115次** |
+| 主测试 | qwen3.7-max (T1) + deepseek-v4-pro (T1) + qwen3.7-plus (T2) + glm-5.1 (T2) + deepseek-v4-flash (T3) | 30 × 5 = 150次 |
+| 小批量 smoke | 使用 `--limit` 或 `--models` 先跑少量 pair | 推荐全量前执行 |
+| **合计** | | **150次** |
 
 **每条用例结构：**
 
@@ -1550,30 +1550,46 @@ HUMAN_SPOT_CHECK_RULES = {
 
 ---
 
-### 6.4 Level 3：路由策略回测（复用Level 2数据，无额外调用）
+### 6.4 Level 3：路由策略回测（纯成本模拟 + 风险标注，零 API 调用）
 
-**目的：** 这是项目最核心的数据——证明智能路由比"全程用最贵模型"好。
+**目的：** 回答项目最核心的问题——智能路由比"全程用最贵模型"省多少钱？哪些任务可以安全降级？
 
 **方法：**
-1. 用Level 2的30条case作为输入
-2. 对每条case，路由引擎给出推荐策略
-3. 执行两条路线：
-   - **Baseline**：全部用Tier 1模型（qwen3.7-max）
-   - **Smart Routing**：按路由推荐执行（可能是Tier 1/2/3或Plan-Execute）
-4. 对比质量、成本、延迟
+1. 用 Level 1 (40 条路由边界 case) + Level 2 (30 条真实任务 case) 作为输入
+2. 对每条 case 调用 `Router.route()` 获取路由决策（零真实 API 调用）
+3. 对比两条路线的成本：
+   - **Baseline**：全部用 Tier 1 模型（默认 qwen3.7-max，`--baseline-model` 可覆盖，必须是 Tier 1）
+   - **Smart Routing**：按路由推荐的策略执行，成本取 `decision.estimated_cost`
+4. 质量评估使用 Router 先验风险标注（`quality_mode: routing_prior`），不做实测质量对比
+
+**关键设计决定：**
+
+- **无候选不算省钱**：Router 返回 `executor=None`（escalate_to_human）时，`effective_router_cost = baseline_cost`，`savings = 0`。避免把 `estimated_cost=0` 误算成"节省 100%"
+- **savings 允许负数**：Router 比 baseline 更贵时暴露为 overspend
+- **降级三态分类**：
+  - `none`：executor 为 Tier 1 或无候选
+  - `safe`：Tier > 1 + LOW risk + 无审批 + SIMPLE/MODERATE + quality_loss ≤ 0.15
+  - `risky`：Tier > 1 但不满足 safe 条件
+- **`has_executable_model` 和 `requires_human_review` 语义独立**：有候选模型 ≠ 可自动执行
+- **Summary 成本汇总基于 `effective_router_cost`**，不用 `raw_router_cost`
+- **case_set=all/l1/l2**：可选只跑 L1、只跑 L2、或全部（默认 all）
+
+**方法论参考：** 借鉴 [PinchBench](https://pinchbench.com/about)（[skill repo](https://github.com/pinchbench/skill)）"真实任务 + 可评分 + 可追踪"评测方法论，case 与评分逻辑均自研。AI Router Benchmark 不评估通用 agent 能力，而是评估路由决策质量与成本节省。
 
 **输出对比表：**
 
-| 指标 | 全程Tier 1 (Baseline) | 智能路由 (Smart Routing) | 差异 |
+| 指标 | 全程 Tier 1 (Baseline) | 智能路由 (Smart Routing) | 说明 |
 |------|----------------------|------------------------|------|
-| 平均质量分 | 8.5 | 8.1 | -4.7% |
-| 总成本 | ¥12.50 | ¥4.38 | **-65%** |
-| 平均延迟 | 2,800ms | 1,600ms | -43% |
-| 严重错误率 | 3% | 5% | +2pp |
-| 质量可接受率（≥7分） | 93% | 87% | -6pp |
-| 成本/质量比 | ¥1.47/分 | ¥0.54/分 | **-63%** |
+| 总成本 | ¥X.XX | ¥Y.YY | 基于 CostEstimator 模拟 |
+| 节省率 | — | Z% | baseline - effective_router_cost |
+| 超支 case 数 | — | N | Router 比 baseline 更贵的 case |
+| 安全降级数 | — | N | 可安全使用低 Tier 模型的 case |
+| 风险降级数 | — | N | 需关注的低 Tier 降级 case |
+| 不可执行数 | — | N | Router 推荐人工兜底的 case |
 
-**这才是答辩时最有说服力的slide。**
+**质量模式标注：** `quality_mode: routing_prior`，明确标注质量为路由先验估计，非实测。L2 实测质量分数可后续增强接入。
+
+**Disclaimer：** "Level 3 MVP uses routing priors and cost simulation only. Quality is risk-estimated, not measured. Savings for approval-required cases are potential savings assuming approval is granted."
 
 ---
 
@@ -1760,7 +1776,7 @@ $ ai-router optimize --prompt my_prompt.txt
 - 任务-模型适配矩阵热力图（task_type × model，颜色深浅表示质量分）
 - Level 1离线测试结果（分类准确率、Tier推荐准确率）
 - Level 2真实对比结果（质量分+成本+延迟三维对比表）
-- Level 3策略回测对比（全程Tier1 vs 智能路由：成本降低XX%，质量变化XX%）
+- Level 3策略回测对比（全程Tier1 vs 智能路由：成本降低XX%，降级建议分布）
 
 #### P1：优化中心
 
@@ -2225,7 +2241,7 @@ MVP阶段消费看板基于`routing_decisions + execution_feedback`聚合，后�
 | D11 | 实现上下文工程B-1优先级框架 + Token分层预算 | 优先级框架 |
 | D12 | 实现B-2压缩引擎：冗余剔除+截断+规则摘要化（5种上下文类型的结构化摘要规则） | 压缩引擎（3策略） |
 | D13 | 实现`ai-router optimize`：上下文优化建议+压缩前后Token估算（展示3种策略对比）；CLI集成测试 | 优化命令 |
-| D14 | 实现`ai-router benchmark --level 1`（80-100条规则测试）；**后台启动Level 2**（`benchmark --level 2 --resume`，支持断点续跑/失败重试/限速） | Benchmark L1+Level 2启动 |
+| D14 | 实现`ai-router benchmark --level 1`（40条规则测试）；**后台启动Level 2**（`benchmark --level 2 --resume`，支持断点续跑/失败重试/限速） | Benchmark L1+Level 2启动 |
 
 **Week 2检查点：** `analyze`用真实LLM推荐 + `audit`找Top浪费模式 + `optimize`给上下文压缩建议 + `benchmark --level 1`跑通规则测试
 
@@ -2244,7 +2260,7 @@ MVP阶段消费看板基于`routing_decisions + execution_feedback`聚合，后�
 | D16 | 生成Level 2报告（任务-模型适配矩阵、评分表）；Streamlit P0页面（消费看板→路由工作台）+ P1页面（优化中心） | L2报告 + Web核心页面 |
 | D17 | Streamlit P0页面（Benchmark结果）+ P2页面（规则管理） | Web完整 |
 | D18 | Streamlit P3页面（上下文工程验证）+ 剩余页面收尾 | 全部页面完成 |
-| D19 | **Level 3策略回测**（复用Level 2数据：全程Tier1 vs 智能路由）+ **Context Rot验证实验**（3×3×3=27次API调用） | 回测报告 + 退化趋势数据 |
+| D19 | **Level 3策略回测**（L1+L2离线回测：全程Tier1 vs 智能路由成本对比 + 降级分类）+ **Context Rot验证实验**（3×3×3=27次API调用） | 回测报告 + 退化趋势数据 |
 | D20 | **上下文工程B-3预算管理**（基于L2实测数据+ContextRot观察定规则）；长上下文策略验证 | B-3完成 + 预算配置 |
 | D21 | Docker Compose + 集成测试 + 演示数据固化 + **预录第一版系统演示备份视频**（防止Week 4系统临时故障） | 可部署系统 + 备份视频 |
 
@@ -2278,7 +2294,7 @@ MVP阶段消费看板基于`routing_decisions + execution_feedback`聚合，后�
 2. 输入20条不同任务，能输出可解释路由决策（含模型推荐、成本预估、推荐理由）
 3. Web至少能展示路由工作台、消费看板、优化中心、Benchmark对比（P0+P1页面）
 4. Level 2至少完成30条核心用例中80%的实测
-5. 回测能输出全程Tier 1 vs 智能路由的成本/质量对比
+5. 回测能输出全程Tier 1 vs 智能路由的成本对比 + 降级分类（safe/risky）
 6. Docker Compose可启动Web和核心服务
 7. 所有演示数据有离线备份，API不可用时仍能演示
 
@@ -2291,7 +2307,7 @@ MVP阶段消费看板基于`routing_decisions + execution_feedback`聚合，后�
 | 架构设计 | 15% | 五层路由架构、模型无关Adapter、控制面/数据面分离、配置热更新 |
 | 路由引擎质量 | 20% | 硬约束过滤、策略候选生成、多目标评分、Plan-Execute策略、可解释推荐理由 |
 | 工程实现 | 20% | 4个CLI命令、Streamlit Web平台、SQLite审计、Docker一键部署、核心模块测试覆盖率≥80% |
-| 数据驱动能力 | 15% | 三级Benchmark（100条离线+~115次实测+策略回测）、混合评分、上下文工程验证、浪费模式检测 |
+| 数据驱动能力 | 15% | 三级Benchmark（40条离线+30条实测+70条策略回测）、混合评分、上下文工程验证、浪费模式检测 |
 | 文档与SOP | 15% | 9章最佳实践手册（含实测数据）、5个SOP可直接推广、系统设计文档 |
 | 答辩表现 | 15% | CLI+Web现场演示、Benchmark数据支撑、预录备份视频 |
 
@@ -2319,7 +2335,7 @@ MVP阶段消费看板基于`routing_decisions + execution_feedback`聚合，后�
 | 3 | CLI工具集(ai-router) | 可安装CLI包 | 4个核心命令均可用 |
 | 4 | Web管控平台 | 前后端代码仓库 | Docker Compose一键部署 |
 | 5 | 上下文工程模块 | 代码+文档 | 分层压缩+预算管理+质量门禁+长上下文20-30%减少（实验目标） |
-| 6 | 自动化Benchmark套件 | 测试框架+数据集 | 离线规则测试集≥100条；静态测试用例库覆盖6类任务；真实模型实测子集30条核心用例；回测报告（全程Tier1 vs 智能路由） |
+| 6 | 自动化Benchmark套件 | 测试框架+数据集 | 离线规则测试集≥40条；静态测试用例库覆盖6类任务；真实模型实测子集30条核心用例；回测报告（全程Tier1 vs 智能路由成本对比+降级分类） |
 | 7 | 上下文工程验证报告 | 数据+图表 | 3代表模型×3任务×3长度趋势图+预算建议 |
 | 8 | Token优化最佳实践手册 | 文档（9章） | 含实测数据 |
 | 9 | 企业Token管控SOP | 文档（5个SOP） | 可直接推广 |

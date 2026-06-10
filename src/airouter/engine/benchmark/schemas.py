@@ -1,4 +1,4 @@
-"""Benchmark schemas for Level 1 offline rule validation and Level 2 model quality."""
+"""Benchmark schemas for Level 1 offline rule validation, Level 2 model quality, and Level 3 backtest."""
 
 from __future__ import annotations
 
@@ -90,6 +90,7 @@ class L2Case(BaseModel):
     scoring_type: str
     input_context: str = ""
     test_code: str = ""
+    allow_execution: bool = False
     max_tokens: int | None = None
     evaluation_criteria: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
     expected_issues: list[str] = Field(default_factory=list)
@@ -107,6 +108,7 @@ class ExecutorResult(BaseModel):
     cost_cny: float
     attempts: int
     api_params: dict[str, Any] = Field(default_factory=dict)
+    raw_usage: dict[str, Any] | None = None
 
 
 class L2CaseResult(BaseModel):
@@ -130,6 +132,7 @@ class L2CaseResult(BaseModel):
     started_at: str = ""
     completed_at: str = ""
     details: dict[str, Any] = Field(default_factory=dict)
+    response_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class L2Summary(BaseModel):
@@ -191,3 +194,182 @@ class ScoreResult:
     overall_score: float
     dimension_scores: dict[str, float] = field(default_factory=dict)
     details: dict[str, Any] = field(default_factory=dict)
+
+
+# ── Level 3 schemas ──────────────────────────────────────────
+
+
+class BacktestCase(BaseModel):
+    """Single case for Level 3 backtest, sourced from L1 or L2."""
+
+    id: str
+    source: Literal["L1", "L2"]
+    prompt: str
+    input_context: str = ""
+    task_type: str = ""
+    complexity: str = ""
+
+
+class BacktestResult(BaseModel):
+    """Result of backtesting a single case: Router cost vs baseline cost."""
+
+    case_id: str
+    source: str
+    result_id: str
+    prompt_hash: str
+    has_executable_model: bool = True
+    task_type: str = ""
+    complexity: str = ""
+
+    # Router recommendation
+    router_strategy: str
+    router_executor: str | None = None
+    router_executor_tier: int | None = None
+    router_planner: str | None = None
+    router_reviewer: str | None = None
+    raw_router_cost: float = 0.0
+    effective_router_cost: float = 0.0
+    router_quality_prior: float = 0.0
+    router_quality_loss_prior: float = 0.0
+
+    # Baseline
+    baseline_model: str
+    baseline_cost: float = 0.0
+
+    # Comparison (can be negative, based on effective_router_cost)
+    savings_cny: float = 0.0
+    savings_rate: float = 0.0
+
+    # Risk annotation
+    risk_level: str = ""
+    requires_human_review: bool = False
+    downgrade_type: str = "none"
+    downgrade_reason: str = ""
+    exclusion_reason: str = ""
+
+
+class BacktestSummary(BaseModel):
+    """Summary of a Level 3 backtest run."""
+
+    level: int = 3
+    total_cases: int
+    l1_cases: int
+    l2_cases: int
+    baseline_model: str
+    quality_mode: str = "routing_prior"
+
+    # Overview (all based on effective_router_cost)
+    baseline_total_cost: float = 0.0
+    router_total_cost: float = 0.0
+    savings_total_cny: float = 0.0
+    savings_rate: float = 0.0
+    overspend_count: int = 0
+    non_executable_count: int = 0
+    approval_required_count: int = 0
+    safe_downgrade_count: int = 0
+    risky_downgrade_count: int = 0
+
+    # Distributions
+    strategy_distribution: dict[str, int] = Field(default_factory=dict)
+    tier_distribution: dict[str, dict[str, int]] = Field(default_factory=dict)
+
+    # Breakdowns
+    by_source: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    by_task_type: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+    # Downgrade suggestions
+    safe_downgrades: list[dict[str, Any]] = Field(default_factory=list)
+    risky_downgrades: list[dict[str, Any]] = Field(default_factory=list)
+
+    # Overspend cases
+    overspend_cases: list[dict[str, Any]] = Field(default_factory=list)
+
+    # Non-executable cases
+    non_executable_cases: list[dict[str, Any]] = Field(default_factory=list)
+
+    # Per-case results
+    case_results: list[BacktestResult] = Field(default_factory=list)
+
+    disclaimer: str = (
+        "Level 3 MVP uses routing priors and cost simulation only. "
+        "Quality is risk-estimated, not measured. "
+        "Measured quality can be attached from Level 2 results later. "
+        "Savings for approval-required cases are potential savings assuming approval is granted."
+    )
+
+
+# ── LLM Judge schemas ────────────────────────────────────────
+
+
+class JudgeResult(BaseModel):
+    """Result of a single LLM judge evaluation."""
+
+    case_id: str
+    model: str
+    judge_model: str
+    task_type: str
+    dimensions: dict[str, float] = Field(default_factory=dict)
+    weighted_score: float = 0.0
+    normalized_score: float = 0.0
+    comment: str = ""
+    model_truncated: bool = False
+    judge_context_truncated: bool = False
+    reasoning_starved: bool = False
+    usage: dict[str, int] = Field(default_factory=dict)
+    # Finance judge extensions
+    rule_score: float | None = None
+    rule_score_disagreement: str | None = None  # "agree" | "rule_too_high" | "rule_too_low" | "unclear"
+    red_flags: list[str] = Field(default_factory=list)
+
+
+class JudgeSummary(BaseModel):
+    """Summary of an LLM judge run."""
+
+    judge_model: str
+    total_evaluations: int
+    successful: int
+    failed: int
+    total_lines: int = 0
+    duplicate_count: int = 0
+    dedupe_strategy: str = "last_entry"
+    model_truncated_count: int = 0
+    judge_context_truncated_count: int = 0
+    starved_count: int = 0
+    by_model: dict[str, dict[str, float]] = Field(default_factory=dict)
+    by_task_type: dict[str, dict[str, float]] = Field(default_factory=dict)
+    estimated_cost_cny: float = 0.0
+    results: list[JudgeResult] = Field(default_factory=list)
+
+
+class PairwiseResult(BaseModel):
+    """Result of a single pairwise A/B comparison."""
+
+    case_id: str
+    model_a: str
+    model_b: str
+    judge_model: str
+    winner_label: str = ""
+    winner_model: str | None = None
+    reason: str = ""
+    dimension_winners: dict[str, str] = Field(default_factory=dict)
+    a_was_first: bool = True
+    usage: dict[str, int] = Field(default_factory=dict)
+
+
+class PairwiseSummary(BaseModel):
+    """Summary of a pairwise judge run."""
+
+    total_pairs: int
+    total_judges: int
+    total_calls: int
+    successful: int = 0
+    failed: int = 0
+    total_lines: int = 0
+    duplicate_count: int = 0
+    dedupe_strategy: str = "last_entry"
+    win_rates: dict[str, dict[str, float]] = Field(default_factory=dict)
+    overall_ranking: list[dict[str, Any]] = Field(default_factory=list)
+    agreement_rate: float = 0.0
+    judge_agreement_detail: dict[str, int] = Field(default_factory=dict)
+    estimated_cost_cny: float = 0.0
+    results: list[PairwiseResult] = Field(default_factory=list)

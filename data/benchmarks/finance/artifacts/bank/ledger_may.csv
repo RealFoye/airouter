@@ -1,0 +1,7 @@
+ledger_id,date,counterparty,amount_cny,reference
+L-010,2026-05-03,Customer A,150000.0,AR-8001
+L-011,2026-05-21,Huaxin Cloud,-63600.0,AP-9001
+L-012,2026-05-19,Guangfa Travel,-28000.0,TR-7788
+L-013,2026-05-25,Anji Furniture,-72800.0,AP-9002
+L-014,2026-05-27,Training Vendor,-12500.0,TRN-0601
+L-015,2026-05-26,Office Depot,-8800.0,OD-1122

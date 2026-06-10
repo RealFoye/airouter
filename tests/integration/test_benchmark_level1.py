@@ -43,12 +43,6 @@ def test_benchmark_level1_resume():
     assert "Benchmark 总览" in result.output
 
 
-def test_benchmark_level3_not_implemented():
-    """Level 3 exits 1."""
-    result = runner.invoke(app, ["benchmark", "--level", "3"])
-    assert result.exit_code == 1
-
-
 def test_benchmark_level99_unsupported():
     """Unsupported level exits 1."""
     result = runner.invoke(app, ["benchmark", "--level", "99"])

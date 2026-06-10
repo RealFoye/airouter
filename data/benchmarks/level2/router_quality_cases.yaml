@@ -4,6 +4,8 @@ models:
   - "qwen3.7-max"
   - "qwen3.7-plus"
   - "deepseek-v4-flash"
+  - "deepseek-v4-pro"
+  - "glm-5.1"
 
 cases:
   # ── Code Generation 6 (CG) ──────────────────────────────────
@@ -13,7 +15,7 @@ cases:
     complexity: "SIMPLE"
     prompt: "写一个Python函数检查字符串是否为回文（palindrome），忽略大小写和非字母数字字符"
     input_context: ""
-    max_tokens: 1024
+    max_tokens: 8192
     evaluation_criteria:
       must_have:
         - id: function_def
@@ -37,9 +39,9 @@ cases:
   - id: "CG-SIMPLE-002"
     task_type: "CODE_GENERATION"
     complexity: "SIMPLE"
-    prompt: "写一个函数，输入一个整数列表，对于1到n的每个数字：如果能被3和5同时整除打印'FizzBuzz'，被3整除打印'Fizz'，被5整除打印'Buzz'，否则打印数字本身。返回结果列表。"
+    prompt: "写一个函数，输入一个整数列表，对于1到n的每个数字：如果能被3和5同时整除输出'FizzBuzz'，被3整除输出'Fizz'，被5整除输出'Buzz'，否则输出数字本身。返回结果列表。"
     input_context: ""
-    max_tokens: 1024
+    max_tokens: 8192
     evaluation_criteria:
       must_have:
         - id: function_def
@@ -63,9 +65,9 @@ cases:
   - id: "CG-MOD-001"
     task_type: "CODE_GENERATION"
     complexity: "MODERATE"
-    prompt: "实现一个基于滑动窗口的API限流中间件。要求：使用固定窗口算法，支持每秒最多N个请求，超限返回429状态码。实现为Python装饰器或中间件类。"
+    prompt: "实现一个基于滑动窗口的API限流中间件。要求：使用滑动窗口算法，支持每秒最多N个请求，超限返回429状态码。实现为Python装饰器或中间件类。"
     input_context: ""
-    max_tokens: 2048
+    max_tokens: 8192
     evaluation_criteria:
       must_have:
         - id: class_or_decorator
@@ -93,7 +95,7 @@ cases:
     complexity: "MODERATE"
     prompt: "实现JWT token的生成和验证模块。要求：使用HS256算法，支持payload中包含user_id和过期时间(exp)，提供generate_token和verify_token两个函数。"
     input_context: ""
-    max_tokens: 2048
+    max_tokens: 8192
     evaluation_criteria:
       must_have:
         - id: generate_func
@@ -119,9 +121,9 @@ cases:
   - id: "CG-COMPLEX-001"
     task_type: "CODE_GENERATION"
     complexity: "COMPLEX"
-    prompt: "设计并实现一个简单的分布式任务队列，支持：1) 生产者提交任务到队列 2) 多个消费者并发处理任务 3) 任务失败自动重试(最多3次) 4) 任务结果回调通知。使用Python threading或asyncio实现。"
+    prompt: "设计并实现一个本地并发任务队列，支持：1) 生产者提交任务到队列 2) 多个消费者并发处理任务 3) 任务失败自动重试(最多3次) 4) 任务结果回调通知。使用Python threading或asyncio实现。"
     input_context: ""
-    max_tokens: 4096
+    max_tokens: 16384
     evaluation_criteria:
       must_have:
         - id: queue_structure
@@ -151,7 +153,7 @@ cases:
     complexity: "COMPLEX"
     prompt: "实现一个异步网页爬虫框架，要求：1) 支持并发爬取多个URL 2) 带限速控制(每秒最多N个请求) 3) 失败自动重试 4) 结果存储(标题、URL、状态码)。使用asyncio + aiohttp。"
     input_context: ""
-    max_tokens: 4096
+    max_tokens: 16384
     evaluation_criteria:
       must_have:
         - id: async_pattern
@@ -183,7 +185,7 @@ cases:
     complexity: "MODERATE"
     prompt: "请审查以下代码，指出所有安全问题和改进建议：\n\n```python\ndef get_user(user_id):\n    query = \"SELECT * FROM users WHERE id = \" + str(user_id)\n    cursor = db.connection.cursor()\n    cursor.execute(query)\n    return cursor.fetchone()\n\ndef login(username, password):\n    user = get_user_by_name(username)\n    if user and user.password == password:\n        return {'status': 'ok', 'user': user}\n    return {'status': 'fail'}\n```"
     input_context: "def get_user(user_id):\n    query = \"SELECT * FROM users WHERE id = \" + str(user_id)\n    cursor = db.connection.cursor()\n    cursor.execute(query)\n    return cursor.fetchone()"
-    max_tokens: 2048
+    max_tokens: 8192
     evaluation_criteria:
       must_have:
         - id: sql_injection_found
@@ -205,7 +207,7 @@ cases:
     complexity: "MODERATE"
     prompt: "请审查以下代码的安全问题：\n\n```python\nimport random\n\nAPI_KEY = \"sk-proj-abc123def456\"\n\ndef generate_token():\n    return random.random()\n\ndef encrypt_data(data):\n    key = \"mysecretkey12345\"\n    encrypted = \"\"\n    for i, c in enumerate(data):\n        encrypted += chr(ord(c) ^ ord(key[i % len(key)]))\n    return encrypted\n```"
     input_context: ""
-    max_tokens: 2048
+    max_tokens: 8192
     evaluation_criteria:
       must_have:
         - id: hardcoded_key
@@ -228,7 +230,7 @@ cases:
     complexity: "MODERATE"
     prompt: "请审查以下代码的性能问题：\n\n```python\ndef get_all_orders():\n    orders = Order.objects.all()\n    result = []\n    for order in orders:\n        customer = Customer.objects.get(id=order.customer_id)\n        items = OrderItem.objects.filter(order_id=order.id)\n        for item in items:\n            product = Product.objects.get(id=item.product_id)\n            item.product_name = product.name\n        order.customer_name = customer.name\n        order.items = items\n        result.append(order)\n    return result\n```"
     input_context: ""
-    max_tokens: 2048
+    max_tokens: 8192
     evaluation_criteria:
       must_have:
         - id: n_plus_one
@@ -252,20 +254,20 @@ cases:
     complexity: "MODERATE"
     prompt: "请审查以下代码的资源管理问题：\n\n```python\nimport requests\n\ndef fetch_all_urls(urls):\n    results = []\n    sessions = []\n    for url in urls:\n        session = requests.Session()\n        sessions.append(session)\n        resp = session.get(url)\n        results.append(resp.text)\n    return results\n\ndef process_files(file_paths):\n    files = []\n    for path in file_paths:\n        f = open(path, 'r')\n        files.append(f)\n        data = f.read()\n    return [f.name for f in files]\n```"
     input_context: ""
-    max_tokens: 2048
+    max_tokens: 8192
     evaluation_criteria:
       must_have:
         - id: resource_leak
-          any_of: ["memory leak", "内存泄漏", "unclosed", "未关闭", "connection pool", "资源泄漏", "resource leak"]
+          any_of: ["resource leak", "资源泄漏", "内存泄漏", "memory leak", "unclosed", "未关闭", "connection pool", "文件句柄", "文件描述符", "session.close", "close()", "未释放", "连接池", "socket", "上下文管理器", "context manager", "with open", "finally"]
         - id: context_manager
           any_of: ["with ", "context manager", "上下文管理器", "__enter__", "finally"]
         - id: session_close
-          any_of: ["close", "关闭", "session.close"]
+          any_of: ["close", "关闭", "session.close", ".close()"]
       nice_to_have:
         - id: fix_suggestion
           any_of: ["fix", "修复", "建议", "should", "改为"]
     expected_issues:
-      - "memory_leak"
+      - "resource_leak"
     scoring_type: "code_review"
     tags: ["performance", "code_review"]
     notes: "未关闭的 Session 和文件句柄"
@@ -275,7 +277,7 @@ cases:
     complexity: "COMPLEX"
     prompt: "请审查以下代码的设计问题：\n\n```python\nclass UserManager:\n    def __init__(self):\n        self.db = Database()\n        self.cache = Cache()\n        self.email_service = EmailService()\n        self.sms_service = SMSService()\n\n    def create_user(self, data):\n        user = self.db.insert('users', data)\n        self.cache.set(f'user:{user.id}', user)\n        self.email_service.send_welcome(user.email)\n        self.sms_service.send_code(user.phone)\n        return user\n\n    def delete_user(self, user_id):\n        self.db.delete('users', user_id)\n        self.cache.delete(f'user:{user_id}')\n        self.email_service.send_goodbye(user_id)\n        self.db.delete('orders', user_id=user_id)\n        self.db.delete('logs', user_id=user_id)\n\n    def get_user(self, user_id):\n        cached = self.cache.get(f'user:{user_id}')\n        if cached:\n            return cached\n        return self.db.get('users', user_id)\n\n    def send_notification(self, user_id, msg):\n        user = self.get_user(user_id)\n        self.email_service.send(user.email, msg)\n        self.sms_service.send(user.phone, msg)\n```"
     input_context: ""
-    max_tokens: 2048
+    max_tokens: 16384
     evaluation_criteria:
       must_have:
         - id: srp_violation
@@ -297,7 +299,7 @@ cases:
     complexity: "COMPLEX"
     prompt: "请审查以下代码的架构问题：\n\n```python\n# module_a.py\nfrom module_b import ServiceB\n\nclass ServiceA:\n    def __init__(self):\n        self.b = ServiceB()\n\n    def process(self):\n        data = self.b.fetch()\n        return self._transform(data)\n\n# module_b.py\nfrom module_a import ServiceA\n\nclass ServiceB:\n    def __init__(self):\n        self.a = ServiceA()\n\n    def fetch(self):\n        return self.a.get_data()\n\n    def get_report(self):\n        return self.a.process()\n```"
     input_context: ""
-    max_tokens: 2048
+    max_tokens: 16384
     evaluation_criteria:
       must_have:
         - id: circular_dep
@@ -320,7 +322,7 @@ cases:
     complexity: "SIMPLE"
     prompt: "分析以下代码的bug并给出修复方案：\n\n```python\ndef get_user_name(user_dict):\n    return user_dict['profile']['name']\n\n# 调用\nresult = get_user_name({'profile': None})\n```\n\n错误信息：AttributeError: 'NoneType' object has no attribute 'name'"
     input_context: ""
-    max_tokens: 1024
+    max_tokens: 8192
     evaluation_criteria:
       must_have:
         - id: none_check
@@ -341,7 +343,7 @@ cases:
     complexity: "SIMPLE"
     prompt: "分析以下代码的bug：\n\n```python\ndef get_last_item(items):\n    return items[len(items)]\n\n# 调用\nresult = get_last_item([1, 2, 3])\n```\n\n错误信息：IndexError: list index out of range"
     input_context: ""
-    max_tokens: 1024
+    max_tokens: 8192
     evaluation_criteria:
       must_have:
         - id: index_error
@@ -362,7 +364,7 @@ cases:
     complexity: "MODERATE"
     prompt: "分析以下代码为什么会导致无限循环：\n\n```python\ndef find_first_negative(numbers):\n    i = 0\n    while True:\n        if numbers[i] < 0:\n            return i\n        i += 1\n\n# 调用（列表中没有负数）\nresult = find_first_negative([1, 2, 3, 4, 5])\n```\n\n程序永远不返回。"
     input_context: ""
-    max_tokens: 1024
+    max_tokens: 8192
     evaluation_criteria:
       must_have:
         - id: infinite_loop
@@ -385,7 +387,7 @@ cases:
     complexity: "MODERATE"
     prompt: "分析以下代码的计算错误：\n\n```python\ndef calculate_total(prices):\n    total = 0\n    for price in prices:\n        total = total * 10 + price  # 意图是累加\n    return total\n\n# 调用\nresult = calculate_total([100, 200, 300])\n# 预期: 600, 实际: 102300\n```"
     input_context: ""
-    max_tokens: 1024
+    max_tokens: 8192
     evaluation_criteria:
       must_have:
         - id: logic_error
@@ -396,7 +398,7 @@ cases:
         - id: overflow_mention
           any_of: ["overflow", "溢出", "数值过大", "integer"]
     expected_issues:
-      - "integer_overflow"
+      - "logic_error"
     scoring_type: "bug_analysis"
     tags: ["logic", "bug_analysis"]
     notes: "逻辑错误：乘法代替加法"
@@ -406,7 +408,7 @@ cases:
     complexity: "COMPLEX"
     prompt: "分析以下多线程代码的问题：\n\n```python\nimport threading\n\ncounter = 0\n\ndef increment():\n    global counter\n    for _ in range(100000):\n        counter += 1\n\nthreads = [threading.Thread(target=increment) for _ in range(10)]\nfor t in threads:\n    t.start()\nfor t in threads:\n    t.join()\n\nprint(counter)  # 预期: 1000000, 实际: 不确定\n```"
     input_context: ""
-    max_tokens: 2048
+    max_tokens: 16384
     evaluation_criteria:
       must_have:
         - id: race_condition
@@ -429,7 +431,7 @@ cases:
     complexity: "COMPLEX"
     prompt: "分析以下代码为什么会出现死锁：\n\n```python\nimport threading\n\nlock_a = threading.Lock()\nlock_b = threading.Lock()\n\ndef thread_1():\n    with lock_a:\n        print('Thread 1: acquired lock_a')\n        import time; time.sleep(0.1)\n        with lock_b:\n            print('Thread 1: acquired lock_b')\n\ndef thread_2():\n    with lock_b:\n        print('Thread 2: acquired lock_b')\n        import time; time.sleep(0.1)\n        with lock_a:\n            print('Thread 2: acquired lock_a')\n\nt1 = threading.Thread(target=thread_1)\nt2 = threading.Thread(target=thread_2)\nt1.start(); t2.start()\nt1.join(); t2.join()\n```\n\n程序永远不会结束。"
     input_context: ""
-    max_tokens: 2048
+    max_tokens: 16384
     evaluation_criteria:
       must_have:
         - id: deadlock
@@ -454,7 +456,7 @@ cases:
     complexity: "MODERATE"
     prompt: "为以下REST API端点编写完整的API文档：\n\nPOST /api/v1/users\nGET /api/v1/users/{id}\nPUT /api/v1/users/{id}\nDELETE /api/v1/users/{id}\n\n文档应包含：端点描述、请求方法、URL参数、请求体示例、响应格式、错误码说明。"
     input_context: ""
-    max_tokens: 4096
+    max_tokens: 8192
     evaluation_criteria:
       must_have:
         - id: endpoint_desc
@@ -480,7 +482,7 @@ cases:
     complexity: "MODERATE"
     prompt: "为以下WebSocket协议编写技术文档：\n\n连接地址：wss://api.example.com/ws/chat\n支持的消息类型：join_room, leave_room, send_message, typing_indicator\n\n文档应包含：连接方式、认证流程、消息格式(JSON)、事件类型说明、错误处理、心跳机制。"
     input_context: ""
-    max_tokens: 4096
+    max_tokens: 8192
     evaluation_criteria:
       must_have:
         - id: connection
@@ -504,7 +506,7 @@ cases:
     complexity: "COMPLEX"
     prompt: "编写一份微服务架构文档，描述一个电商系统的以下组件：\n\n- API Gateway\n- User Service\n- Order Service\n- Payment Service\n- Inventory Service\n- Message Queue (RabbitMQ)\n\n文档应包含：系统概述、组件职责、通信方式(同步/异步)、数据流向、部署架构、容错机制。"
     input_context: ""
-    max_tokens: 4096
+    max_tokens: 16384
     evaluation_criteria:
       must_have:
         - id: overview
@@ -528,7 +530,7 @@ cases:
     complexity: "COMPLEX"
     prompt: "为以下数据库schema编写设计文档：\n\n- users表: id, username, email, password_hash, created_at\n- orders表: id, user_id, status, total_amount, created_at\n- order_items表: id, order_id, product_id, quantity, price\n- products表: id, name, description, price, stock\n\n文档应包含：表结构说明、关系图(文字描述)、索引策略、数据一致性保证、常见查询模式。"
     input_context: ""
-    max_tokens: 4096
+    max_tokens: 16384
     evaluation_criteria:
       must_have:
         - id: table_desc
@@ -554,7 +556,7 @@ cases:
     complexity: "MODERATE"
     prompt: "重构以下长函数，将其拆分为多个职责单一的小函数：\n\n```python\ndef process_order(order_data):\n    # 验证订单\n    if not order_data.get('items'):\n        return {'error': 'empty order'}\n    for item in order_data['items']:\n        if item['quantity'] <= 0:\n            return {'error': 'invalid quantity'}\n        if item['price'] < 0:\n            return {'error': 'invalid price'}\n    \n    # 计算总价\n    subtotal = 0\n    for item in order_data['items']:\n        subtotal += item['quantity'] * item['price']\n    tax = subtotal * 0.13\n    shipping = 10.0 if subtotal < 100 else 0.0\n    total = subtotal + tax + shipping\n    \n    # 保存订单\n    order_id = generate_id()\n    db.save('orders', {\n        'id': order_id,\n        'items': order_data['items'],\n        'total': total,\n        'status': 'pending'\n    })\n    \n    # 发通知\n    send_email(order_data['customer_email'], f'Order {order_id} confirmed')\n    log.info(f'Order {order_id} processed, total: {total}')\n    \n    return {'order_id': order_id, 'total': total}\n```"
     input_context: "def process_order(order_data):\n    if not order_data.get('items'):\n        return {'error': 'empty order'}\n    for item in order_data['items']:\n        if item['quantity'] <= 0:\n            return {'error': 'invalid quantity'}\n        if item['price'] < 0:\n            return {'error': 'invalid price'}\n    subtotal = 0\n    for item in order_data['items']:\n        subtotal += item['quantity'] * item['price']\n    tax = subtotal * 0.13\n    shipping = 10.0 if subtotal < 100 else 0.0\n    total = subtotal + tax + shipping\n    order_id = generate_id()\n    db.save('orders', {'id': order_id, 'items': order_data['items'], 'total': total, 'status': 'pending'})\n    send_email(order_data['customer_email'], f'Order {order_id} confirmed')\n    log.info(f'Order {order_id} processed, total: {total}')\n    return {'order_id': order_id, 'total': total}"
-    max_tokens: 3072
+    max_tokens: 8192
     evaluation_criteria:
       must_have:
         - id: validate_func
@@ -578,7 +580,7 @@ cases:
     complexity: "MODERATE"
     prompt: "重构以下代码，将深层嵌套的条件判断提取为guard clause（提前返回）：\n\n```python\ndef process_payment(user, amount):\n    if user is not None:\n        if user.is_active:\n            if user.balance >= amount:\n                if amount > 0:\n                    user.balance -= amount\n                    save(user)\n                    return {'status': 'success', 'balance': user.balance}\n                else:\n                    return {'status': 'error', 'message': 'invalid amount'}\n            else:\n                return {'status': 'error', 'message': 'insufficient balance'}\n        else:\n            return {'status': 'error', 'message': 'user inactive'}\n    else:\n        return {'status': 'error', 'message': 'user not found'}\n```"
     input_context: "def process_payment(user, amount):\n    if user is not None:\n        if user.is_active:\n            if user.balance >= amount:\n                if amount > 0:\n                    user.balance -= amount\n                    save(user)\n                    return {'status': 'success', 'balance': user.balance}\n                else:\n                    return {'status': 'error', 'message': 'invalid amount'}\n            else:\n                return {'status': 'error', 'message': 'insufficient balance'}\n        else:\n            return {'status': 'error', 'message': 'user inactive'}\n    else:\n        return {'status': 'error', 'message': 'user not found'}"
-    max_tokens: 2048
+    max_tokens: 8192
     evaluation_criteria:
       must_have:
         - id: guard_clause
@@ -600,7 +602,7 @@ cases:
     complexity: "COMPLEX"
     prompt: "重构以下代码，将if/elif链改为策略模式：\n\n```python\ndef calculate_discount(order_type, amount):\n    if order_type == 'vip':\n        return amount * 0.2\n    elif order_type == 'member':\n        return amount * 0.1\n    elif order_type == 'new_user':\n        return amount * 0.15\n    elif order_type == 'holiday':\n        return amount * 0.05\n    elif order_type == 'regular':\n        return 0.0\n    else:\n        raise ValueError(f'Unknown order type: {order_type}')\n```"
     input_context: "def calculate_discount(order_type, amount):\n    if order_type == 'vip':\n        return amount * 0.2\n    elif order_type == 'member':\n        return amount * 0.1\n    elif order_type == 'new_user':\n        return amount * 0.15\n    elif order_type == 'holiday':\n        return amount * 0.05\n    elif order_type == 'regular':\n        return 0.0\n    else:\n        raise ValueError(f'Unknown order type: {order_type}')"
-    max_tokens: 2048
+    max_tokens: 16384
     evaluation_criteria:
       must_have:
         - id: strategy_pattern
@@ -622,7 +624,7 @@ cases:
     complexity: "COMPLEX"
     prompt: "重构以下代码，将手动缓存逻辑改为装饰器模式：\n\n```python\n_cache = {}\n\ndef get_user_profile(user_id):\n    cache_key = f'profile:{user_id}'\n    if cache_key in _cache:\n        return _cache[cache_key]\n    \n    profile = db.query('SELECT * FROM profiles WHERE user_id = %s', user_id)\n    _cache[cache_key] = profile\n    return profile\n\ndef get_product_info(product_id):\n    cache_key = f'product:{product_id}'\n    if cache_key in _cache:\n        return _cache[cache_key]\n    \n    product = db.query('SELECT * FROM products WHERE id = %s', product_id)\n    _cache[cache_key] = product\n    return product\n```"
     input_context: "_cache = {}\n\ndef get_user_profile(user_id):\n    cache_key = f'profile:{user_id}'\n    if cache_key in _cache:\n        return _cache[cache_key]\n    profile = db.query('SELECT * FROM profiles WHERE user_id = %s', user_id)\n    _cache[cache_key] = profile\n    return profile\n\ndef get_product_info(product_id):\n    cache_key = f'product:{product_id}'\n    if cache_key in _cache:\n        return _cache[cache_key]\n    product = db.query('SELECT * FROM products WHERE id = %s', product_id)\n    _cache[cache_key] = product\n    return product"
-    max_tokens: 2048
+    max_tokens: 16384
     evaluation_criteria:
       must_have:
         - id: decorator_pattern
@@ -648,7 +650,7 @@ cases:
     complexity: "MODERATE"
     prompt: "设计一个用户认证系统，要求支持：\n1. 用户名+密码登录\n2. JWT token 认证\n3. Token 刷新机制\n4. 密码重置流程\n5. 多设备登录管理\n\n请给出架构设计，包含组件划分、数据模型、关键流程、安全措施。"
     input_context: ""
-    max_tokens: 4096
+    max_tokens: 8192
     evaluation_criteria:
       must_have:
         - id: auth_components
@@ -674,7 +676,7 @@ cases:
     complexity: "MODERATE"
     prompt: "设计一个消息通知系统，要求支持：\n1. 多渠道推送（邮件、短信、App推送、站内信）\n2. 消息模板管理\n3. 用户偏好设置（接收哪些渠道）\n4. 消息发送记录和状态追踪\n5. 异步发送和重试机制\n\n请给出架构设计，包含组件划分、数据流、技术选型。"
     input_context: ""
-    max_tokens: 4096
+    max_tokens: 8192
     evaluation_criteria:
       must_have:
         - id: channels
@@ -698,9 +700,9 @@ cases:
   - id: "ARCH-EXP-001"
     task_type: "ARCHITECTURE"
     complexity: "EXPERT"
-    prompt: "设计一个高可用分布式缓存系统，要求：\n1. 支持数据分片（一致性哈希）\n2. 主从复制保证高可用\n3. 缓存穿透/击穿/雪崩防护\n4. 支持LRU/LFU多种淘汰策略\n5. 数据持久化（RDB + AOF）\n\n请给出完整的架构设计，包含数据分布策略、故障转移机制、性能优化方案。"
+    prompt: "设计一个高可用分布式缓存系统，要求：\n1. 支持数据分片，数据均匀分布到多个节点\n2. 支持节点故障时数据自动冗余恢复\n3. 防止缓存穿透、击穿、雪崩\n4. 支持多种缓存淘汰策略\n5. 支持数据持久化，重启后可恢复\n\n请给出完整的架构设计，包含数据分布策略、故障转移机制、性能优化方案。"
     input_context: ""
-    max_tokens: 4096
+    max_tokens: 16384
     evaluation_criteria:
       must_have:
         - id: sharding
@@ -724,9 +726,9 @@ cases:
   - id: "ARCH-EXP-002"
     task_type: "ARCHITECTURE"
     complexity: "EXPERT"
-    prompt: "设计一个多租户SaaS平台架构，要求：\n1. 数据隔离策略（共享数据库 vs 独立数据库）\n2. 租户自定义配置和主题\n3. 基于角色的权限控制（RBAC）\n4. 资源计量和计费\n5. 水平扩展能力\n6. 租户间数据严格隔离\n\n请给出架构设计，包含数据隔离方案、权限模型、扩展策略。"
+    prompt: "设计一个多租户SaaS平台架构，要求：\n1. 租户间数据严格隔离，支持灵活的数据隔离方案\n2. 租户自定义配置和主题\n3. 支持多级别的用户权限管理\n4. 资源计量和计费\n5. 水平扩展能力\n\n请给出架构设计，包含数据隔离方案、权限模型、扩展策略。"
     input_context: ""
-    max_tokens: 4096
+    max_tokens: 16384
     evaluation_criteria:
       must_have:
         - id: data_isolation

@@ -1,14 +1,30 @@
 # AI Router 模型注册表
-# MVP 初始估计，需实测 API 后校准定价
+# CCH 后台用量日志校准价（CNY per 1K tokens）
+# 校准来源：2026-06-08 L2 真实 API smoke + CCH usage CSV，Cost(USD) 按 7.2 折 CNY
 
 models:
   # ── Tier 1（重型）：规划、架构、复杂推理 ──
+
+  # LLM Judge（不参与常规路由，专用于评测）
+  - name: "claude-sonnet-4-6"
+    tier: 1
+    provider: "anthropic"
+    api_base: "https://token.cvte.com/v1"
+    input_price_per_1k: 0.0216    # CNY 21.6 / 1M (USD 3.0 / 1M * 7.2)
+    output_price_per_1k: 0.108    # CNY 108 / 1M (USD 15.0 / 1M * 7.2)
+    max_context_window: 200000
+    capabilities:
+      - judge
+      - complex_reasoning
+    allow_sensitive_data: true
+    latency_estimate_ms: 5000
+
   - name: "qwen3.7-max"
     tier: 1
     provider: "dashscope"
     api_base: "https://token.cvte.com/v1"
-    input_price_per_1k: 0.012     # CNY per 1K tokens (CCH: CNY 12 / 1M)
-    output_price_per_1k: 0.036    # CCH: CNY 36 / 1M
+    input_price_per_1k: 0.018     # CCH billing calibrated: CNY 18 / 1M
+    output_price_per_1k: 0.054    # CCH billing calibrated: CNY 54 / 1M
     max_context_window: 991000
     capabilities:
       - code_gen
@@ -34,8 +50,8 @@ models:
     tier: 1
     provider: "deepseek"
     api_base: "https://token.cvte.com/v1"
-    input_price_per_1k: 0.012     # CCH: CNY 12 / 1M
-    output_price_per_1k: 0.024    # CCH: CNY 24 / 1M
+    input_price_per_1k: 0.003132  # CCH billing calibrated: CNY 3.132 / 1M
+    output_price_per_1k: 0.006264 # CCH billing calibrated: CNY 6.264 / 1M
     max_context_window: 1000000
     capabilities:
       - code_gen
@@ -56,13 +72,36 @@ models:
       cache_min_prefix_tokens: 1024
       cache_ttl_seconds: 300
 
+  - name: "kimi-k2.6"
+    tier: 1
+    provider: "kimi"
+    api_base: "https://token.cvte.com/v1"
+    input_price_per_1k: 0.00432   # Temporary estimate, pending CCH usage CSV calibration
+    output_price_per_1k: 0.018    # Temporary estimate, pending CCH usage CSV calibration
+    max_context_window: 256000
+    capabilities:
+      - complex_reasoning
+      - documentation
+      - data_processing
+      - conversation
+      - formatting
+    allow_sensitive_data: true
+    latency_estimate_ms: 3000
+    cache:
+      supports_prompt_caching: "unknown"
+      cache_mode: unknown
+      cache_write_price_multiplier: 1.0
+      cache_read_price_ratio: 0.0
+      cache_min_prefix_tokens: 0
+      cache_ttl_seconds: 0
+
   # ── Tier 2（标准）：通用编码、文档生成 ──
   - name: "qwen3.7-plus"
     tier: 2
     provider: "dashscope"
     api_base: "https://token.cvte.com/v1"
-    input_price_per_1k: 0.00125   # CCH: CNY 1.25 / 1M
-    output_price_per_1k: 0.00375  # CCH: CNY 3.75 / 1M
+    input_price_per_1k: 0.001944  # CCH billing calibrated: CNY 1.944 / 1M
+    output_price_per_1k: 0.00864  # CCH billing calibrated: CNY 8.64 / 1M
     max_context_window: 991000
     capabilities:
       - code_gen
@@ -82,12 +121,35 @@ models:
       cache_min_prefix_tokens: 1024
       cache_ttl_seconds: 300
 
+  - name: "MiniMax-M3"
+    tier: 2
+    provider: "minimax"
+    api_base: "https://token.cvte.com/v1"
+    input_price_per_1k: 0.00216   # Temporary estimate, pending CCH usage CSV calibration
+    output_price_per_1k: 0.00864  # Temporary estimate, pending CCH usage CSV calibration
+    max_context_window: 200000
+    capabilities:
+      - complex_reasoning
+      - documentation
+      - data_processing
+      - conversation
+      - formatting
+    allow_sensitive_data: true
+    latency_estimate_ms: 2500
+    cache:
+      supports_prompt_caching: "unknown"
+      cache_mode: unknown
+      cache_write_price_multiplier: 1.0
+      cache_read_price_ratio: 0.0
+      cache_min_prefix_tokens: 0
+      cache_ttl_seconds: 0
+
   - name: "glm-5.1"
     tier: 2
     provider: "zhipu"
     api_base: "https://token.cvte.com/v1"
-    input_price_per_1k: 0.008     # CCH: CNY 8 / 1M
-    output_price_per_1k: 0.028    # CCH: CNY 28 / 1M
+    input_price_per_1k: 0.01008   # CCH billing calibrated: CNY 10.08 / 1M
+    output_price_per_1k: 0.0288   # CCH billing calibrated: CNY 28.8 / 1M
     max_context_window: 200000
     capabilities:
       - code_gen
@@ -111,8 +173,8 @@ models:
     tier: 3
     provider: "deepseek"
     api_base: "https://token.cvte.com/v1"
-    input_price_per_1k: 0.004     # CCH: CNY 4 / 1M
-    output_price_per_1k: 0.008    # CCH: CNY 8 / 1M
+    input_price_per_1k: 0.001008  # CCH billing calibrated: CNY 1.008 / 1M
+    output_price_per_1k: 0.002016 # CCH billing calibrated: CNY 2.016 / 1M
     max_context_window: 1000000
     capabilities:
       - code_gen

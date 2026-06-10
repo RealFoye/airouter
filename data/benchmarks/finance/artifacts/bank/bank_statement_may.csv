@@ -1,0 +1,9 @@
+bank_id,date,counterparty,amount_cny,reference
+B-001,2026-05-03,Customer A,150000.0,AR-8001
+B-002,2026-05-21,Huaxin Cloud,-63600.0,AP-9001
+B-003,2026-05-31,Bank Service Fee,-35.0,FEE-MAY
+B-004,2026-05-19,Guangfa Travel,-28000.0,TR-7788
+B-005,2026-05-28,Customer B,50000.0,UNKNOWN
+B-006,2026-05-25,Anji Furniture,-72320.0,AP-9002
+B-007,2026-05-26,Office Depot,-8800.0,OD-1122
+B-008,2026-05-26,Office Depot,-8800.0,OD-1122

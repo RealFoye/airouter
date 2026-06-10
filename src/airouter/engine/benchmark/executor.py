@@ -99,6 +99,7 @@ class ModelExecutor:
                 "max_tokens": tokens,
                 "system_prompt_version": SYSTEM_PROMPT_VERSION,
             },
+            raw_usage=response.raw_usage,
         )
 
     def _get_model_entry(self, model_name: str) -> ModelEntry:

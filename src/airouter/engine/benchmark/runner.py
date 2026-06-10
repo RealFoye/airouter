@@ -1,4 +1,4 @@
-"""Level 1 and Level 2 benchmark runners."""
+"""Level 1, Level 2, and Level 3 benchmark runners."""
 
 from __future__ import annotations
 
@@ -8,6 +8,8 @@ import logging
 import os
 import re
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 
@@ -17,7 +19,11 @@ from airouter.config import AppSettings, load_models
 from airouter.engine.benchmark.evaluator import auto_score
 from airouter.engine.benchmark.executor import SYSTEM_PROMPT_VERSION, ModelExecutor
 from airouter.engine.benchmark.loader import load_cases, load_l2_cases
+from airouter.engine.benchmark.reporter import Level3BacktestReporter
 from airouter.engine.benchmark.schemas import (
+    BacktestCase,
+    BacktestResult,
+    BacktestSummary,
     BenchmarkSummary,
     CaseResult,
     FailedPair,
@@ -246,12 +252,15 @@ class Level2BenchmarkRunner:
         force_mock: bool = True,
         rate_limit_rpm: int = 20,
         results_base_dir: Path | None = None,
+        workers: int = 5,
     ):
         self.cases_path = cases_path
         self._models_override = models
         self._force_mock = force_mock
         self._rate_limit_rpm = rate_limit_rpm
         self._results_base_dir = results_base_dir or self.DEFAULT_RESULTS_DIR
+        self._workers = workers
+        self._jsonl_lock = threading.Lock()
 
         settings = AppSettings()
         registry = ModelRegistry(load_models())
@@ -354,11 +363,13 @@ class Level2BenchmarkRunner:
         # Write initial state
         self._write_state(run_dir, state)
 
-        # 11. Execute pairs
+        # 11. Execute pairs (concurrent)
         auth_aborted = False
         run_count = 0
-        for case, model in pending_pairs:
-            run_count += 1
+        run_lock = threading.Lock()
+
+        def _execute_pair(case: L2Case, model: str) -> None:
+            nonlocal run_count, auth_aborted
             pair_key = f"{case.id}::{model}"
             started_at = datetime.now().isoformat(timespec="seconds")
 
@@ -372,10 +383,28 @@ class Level2BenchmarkRunner:
                 # Save raw output
                 raw_name = _sanitize_filename(f"{case.id}_{model}") + ".txt"
                 raw_path = raw_dir / raw_name
-                raw_path.write_text(exec_result.response_content, encoding="utf-8")
+                with self._jsonl_lock:
+                    raw_path.write_text(exec_result.response_content, encoding="utf-8")
 
-                # Auto-score
-                score = auto_score(case, exec_result.response_content)
+                # Build response_metadata from raw_usage (BEFORE auto_score)
+                response_metadata: dict = {}
+                if exec_result.raw_usage:
+                    ru = exec_result.raw_usage
+                    response_metadata = {
+                        k: ru[k]
+                        for k in ("finish_reason", "reasoning_tokens", "reasoning_starved")
+                        if k in ru
+                    }
+                # Add model_truncated flag
+                response_metadata["model_truncated"] = response_metadata.get("finish_reason") == "length"
+
+                # Save metadata file for judge consumption
+                meta_path = raw_dir / (_sanitize_filename(f"{case.id}_{model}") + "_meta.json")
+                with self._jsonl_lock:
+                    meta_path.write_text(json.dumps(response_metadata, ensure_ascii=False), encoding="utf-8")
+
+                # Auto-score (with response_metadata for truncation penalty)
+                score = auto_score(case, exec_result.response_content, response_metadata)
 
                 # Build result
                 case_result = L2CaseResult(
@@ -395,39 +424,36 @@ class Level2BenchmarkRunner:
                     started_at=started_at,
                     completed_at=completed_at,
                     details=score.details,
+                    response_metadata=response_metadata,
                 )
 
-                # Append JSONL
-                self._append_jsonl(jsonl_path, case_result)
-
-                # Update state
-                state.completed.append(pair_key)
-                state.completed_pairs += 1
-                state.last_updated_at = completed_at
-                self._write_state(run_dir, state)
+                # Thread-safe JSONL write
+                with self._jsonl_lock:
+                    self._append_jsonl(jsonl_path, case_result)
 
                 # Progress
-                self._progress(run_count, len(pending_pairs), case.id, model, score.overall_score)
+                with run_lock:
+                    run_count += 1
+                    self._progress(run_count, len(pending_pairs), case.id, model, score.overall_score)
 
             except AdapterAuthError as e:
                 logger.error("Auth error for model=%s: %s — aborting run", model, e)
-                self._append_jsonl(jsonl_path, L2CaseResult(
-                    case_id=case.id, model=model, status="failed",
-                    scoring_type=case.scoring_type,
-                    error_type="AdapterAuthError",
-                    error_message=str(e),
-                    started_at=started_at,
-                    completed_at=datetime.now().isoformat(timespec="seconds"),
-                ))
-                auth_aborted = True
-                break
+                with self._jsonl_lock:
+                    self._append_jsonl(jsonl_path, L2CaseResult(
+                        case_id=case.id, model=model, status="failed",
+                        scoring_type=case.scoring_type,
+                        error_type="AdapterAuthError",
+                        error_message=str(e),
+                        started_at=started_at,
+                        completed_at=datetime.now().isoformat(timespec="seconds"),
+                    ))
+                with run_lock:
+                    auth_aborted = True
 
             except (AdapterError, Exception) as e:
                 completed_at = datetime.now().isoformat(timespec="seconds")
                 error_type = type(e).__name__
-                logger.warning(
-                    "pair=%s error=%s: %s", pair_key, error_type, e
-                )
+                logger.warning("pair=%s error=%s: %s", pair_key, error_type, e)
 
                 case_result = L2CaseResult(
                     case_id=case.id,
@@ -440,18 +466,32 @@ class Level2BenchmarkRunner:
                     started_at=started_at,
                     completed_at=completed_at,
                 )
-                self._append_jsonl(jsonl_path, case_result)
+                with self._jsonl_lock:
+                    self._append_jsonl(jsonl_path, case_result)
 
-                state.failed.append(FailedPair(
-                    pair=pair_key, error=str(e),
-                    attempts=getattr(e, "attempts", 1),
-                ))
-                state.failed_pairs += 1
-                state.last_updated_at = completed_at
-                self._write_state(run_dir, state)
+                with run_lock:
+                    run_count += 1
+                    if fail_fast:
+                        auth_aborted = True  # signal to stop
 
-                if fail_fast:
+        if self._workers <= 1:
+            for case, model in pending_pairs:
+                if auth_aborted:
                     break
+                _execute_pair(case, model)
+        else:
+            with ThreadPoolExecutor(max_workers=self._workers) as pool:
+                futures = {
+                    pool.submit(_execute_pair, case, model): (case, model)
+                    for case, model in pending_pairs
+                }
+                for future in as_completed(futures):
+                    if auth_aborted:
+                        break
+                    try:
+                        future.result()
+                    except Exception as e:
+                        logger.error("Worker exception: %s", e)
 
         # 12. Finalize — rebuild state from deduped JSONL (source of truth)
         deduped = _dedup_results_from_jsonl(jsonl_path)
@@ -483,6 +523,69 @@ class Level2BenchmarkRunner:
             jsonl_path, run_dir.name, cases, models,
             run_completed=run_completed,
         )
+
+    def run_with_judges(
+        self,
+        judge_models: list[str] | None = None,
+        pairwise: bool = True,
+        judge_workers: int = 20,
+        resume: bool = False,
+        run_id: str | None = None,
+        limit: int | None = None,
+    ) -> dict:
+        """Run L2 full pipeline: model execution → auto-score → absolute judge → pairwise judge."""
+        # Step 1: Run models + auto-score
+        l2_summary = self.run(resume=resume, run_id=run_id, max_pairs=limit)
+
+        # Find the run directory
+        run_dir = self._find_latest_run_dir()
+        if run_dir is None:
+            raise RuntimeError("Cannot find run directory for judge phase")
+
+        raw_dir = str(run_dir / "raw_outputs")
+        cases_path = str(self.cases_path) if self.cases_path else str(
+            Path(__file__).resolve().parents[4] / "data" / "benchmarks" / "level2" / "router_quality_cases.yaml"
+        )
+
+        # Step 2: Absolute Judge
+        from airouter.engine.benchmark.llm_judge_v2 import run_absolute_judge
+        judge_results = run_absolute_judge(
+            cases_path=cases_path,
+            raw_dir=raw_dir,
+            judge_models=judge_models,
+            output_path=str(run_dir / "judge_results.jsonl"),
+            workers=judge_workers,
+        )
+
+        # Step 3: Pairwise Judge (optional)
+        pairwise_results = None
+        if pairwise:
+            from airouter.engine.benchmark.pairwise_judge import run_pairwise_judge
+            pairwise_results = run_pairwise_judge(
+                cases_path=cases_path,
+                raw_dir=raw_dir,
+                judge_models=judge_models,
+                output_path=str(run_dir / "pairwise_results.jsonl"),
+                workers=judge_workers,
+            )
+
+        return {
+            "l2_summary": l2_summary,
+            "judge_results": judge_results,
+            "pairwise_results": pairwise_results,
+            "run_dir": str(run_dir),
+        }
+
+    def _find_latest_run_dir(self) -> Path | None:
+        """Find the most recent run directory."""
+        if not self._results_base_dir.exists():
+            return None
+        dirs = sorted(
+            [d for d in self._results_base_dir.iterdir() if d.is_dir()],
+            key=lambda d: d.stat().st_mtime,
+            reverse=True,
+        )
+        return dirs[0] if dirs else None
 
     def _build_messages(self, case: L2Case) -> list[dict]:
         """Construct messages list from case."""
@@ -676,3 +779,139 @@ class Level2BenchmarkRunner:
             quality_passed=quality_passed,
             quality_threshold=threshold,
         )
+
+
+# ── Level 3 Runner ─────────────────────────────────────────
+
+
+class Level3BenchmarkRunner:
+    """Run Level 3 backtest: pure cost simulation using Router decisions."""
+
+    def __init__(
+        self,
+        l1_cases_path: Path | None = None,
+        l2_cases_path: Path | None = None,
+        case_set: str = "all",
+        baseline_model: str = "qwen3.7-max",
+    ):
+        if case_set not in {"all", "l1", "l2"}:
+            raise ValueError("case_set must be one of: all, l1, l2")
+        self._l1_cases_path = l1_cases_path
+        self._l2_cases_path = l2_cases_path
+        self._case_set = case_set
+        self._router = Router()
+        self._registry = ModelRegistry(load_models())
+        self._reporter = Level3BacktestReporter(self._registry, baseline_model)
+
+    def run(self) -> BacktestSummary:
+        """Load cases, route each, compute costs, and return BacktestSummary."""
+        backtest_cases = self._load_cases()
+        if not backtest_cases:
+            raise ValueError(f"No cases loaded for case_set={self._case_set}")
+        results = [self._run_case(c) for c in backtest_cases]
+        return self._reporter.build_summary(results)
+
+    def _load_cases(self) -> list[BacktestCase]:
+        """Load cases based on case_set selection."""
+        cases: list[BacktestCase] = []
+
+        if self._case_set in ("all", "l1"):
+            l1_cases = load_cases(self._l1_cases_path)
+            for c in l1_cases:
+                cases.append(BacktestCase(
+                    id=c.id,
+                    source="L1",
+                    prompt=c.prompt,
+                    input_context="",
+                    task_type=c.expected_task_type,
+                    complexity=c.expected_complexity,
+                ))
+
+        if self._case_set in ("all", "l2"):
+            l2_cases = load_l2_cases(self._l2_cases_path)
+            for lc in l2_cases:
+                cases.append(BacktestCase(
+                    id=lc.id,
+                    source="L2",
+                    prompt=lc.prompt,
+                    input_context=lc.input_context,
+                    task_type=lc.task_type,
+                    complexity=lc.complexity,
+                ))
+
+        return cases
+
+    def _run_case(self, case: BacktestCase) -> BacktestResult:
+        """Route a single case and compute backtest result."""
+        # L2 cases include input_context
+        route_text = (
+            f"{case.input_context}\n\n{case.prompt}"
+            if case.input_context
+            else case.prompt
+        )
+        decision = self._router.route(route_text)
+
+        # Baseline cost
+        baseline_cost = self._reporter.compute_baseline_cost(decision.task_features)
+
+        # Router cost
+        raw_router_cost = decision.estimated_cost
+        has_executable_model = decision.models.executor is not None
+
+        if has_executable_model:
+            effective_router_cost = raw_router_cost
+            savings_cny = baseline_cost - effective_router_cost
+            savings_rate = savings_cny / baseline_cost if baseline_cost > 0 else 0.0
+            exclusion_reason = ""
+        else:
+            effective_router_cost = baseline_cost
+            savings_cny = 0.0
+            savings_rate = 0.0
+            exclusion_reason = decision.human_review_reason or "no executable model"
+
+        # Downgrade classification
+        downgrade_type, downgrade_reason = self._reporter.classify_downgrade(decision)
+
+        # Extract typed values from decision
+        strategy = decision.recommended_strategy.value
+        risk = decision.risk_level.value
+        executor = decision.models.executor
+        executor_tier = self._get_tier(executor)
+        planner = decision.models.planner
+        reviewer = decision.models.reviewer
+
+        return BacktestResult(
+            case_id=case.id,
+            source=case.source,
+            result_id=f"{case.source}:{case.id}",
+            prompt_hash=decision.task_hash,
+            has_executable_model=has_executable_model,
+            task_type=case.task_type,
+            complexity=case.complexity,
+            router_strategy=strategy,
+            router_executor=executor,
+            router_executor_tier=executor_tier,
+            router_planner=planner,
+            router_reviewer=reviewer,
+            raw_router_cost=raw_router_cost,
+            effective_router_cost=effective_router_cost,
+            router_quality_prior=decision.estimated_quality,
+            router_quality_loss_prior=decision.quality_loss_vs_baseline,
+            baseline_model=self._reporter.baseline_model,
+            baseline_cost=baseline_cost,
+            savings_cny=savings_cny,
+            savings_rate=savings_rate,
+            risk_level=risk,
+            requires_human_review=decision.requires_human_review,
+            downgrade_type=downgrade_type,
+            downgrade_reason=downgrade_reason,
+            exclusion_reason=exclusion_reason,
+        )
+
+    def _get_tier(self, model_name: str | None) -> int | None:
+        """Look up model tier by name."""
+        if not model_name:
+            return None
+        entry = self._registry.get_by_name(model_name)
+        return entry.tier if entry else None
+

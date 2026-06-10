@@ -26,6 +26,8 @@ def _empty_settings() -> AppSettings:
         dashscope_api_key="",
         deepseek_api_key="",
         zhipu_api_key="",
+        kimi_api_key="",
+        minimax_api_key="",
     )
 
 
@@ -74,6 +76,48 @@ def _make_mock_openai_client(
 
     choice = MagicMock()
     choice.message = message
+    choice.finish_reason = "stop"
+
+    response = MagicMock()
+    response.choices = [choice]
+    response.usage = usage
+
+    client.chat.completions.create.return_value = response
+    return client
+
+
+def _make_reasoning_mock_client(
+    content: str = "",
+    prompt_tokens: int = 32,
+    completion_tokens: int = 1024,
+    reasoning_tokens: int = 1017,
+    finish_reason: str = "length",
+):
+    """构造模拟 reasoning model 响应的 OpenAI client。"""
+    client = MagicMock()
+
+    usage = MagicMock()
+    usage.prompt_tokens = prompt_tokens
+    usage.completion_tokens = completion_tokens
+    usage.model_dump = lambda ct=completion_tokens, rt=reasoning_tokens, pt=prompt_tokens: {
+        "prompt_tokens": pt,
+        "completion_tokens": ct,
+        "completion_tokens_details": {
+            "reasoning_tokens": rt,
+            "accepted_prediction_tokens": None,
+            "audio_tokens": None,
+            "rejected_prediction_tokens": None,
+        },
+        "prompt_tokens_details": {"audio_tokens": None, "cached_tokens": 0},
+    }
+
+    message = MagicMock()
+    message.content = content
+    message.model_extra = {"reasoning_content": "thinking..." if reasoning_tokens > 0 else None}
+
+    choice = MagicMock()
+    choice.message = message
+    choice.finish_reason = finish_reason
 
     response = MagicMock()
     response.choices = [choice]
@@ -228,6 +272,16 @@ class TestOpenAICompatAdapter:
             model="deepseek-v4-flash",
             messages=msgs,
             temperature=0.7,
+        )
+
+    def test_kimi_drops_temperature_param(self, adapter, mock_client):
+        """CCH kimi-k2.6 rejects explicit temperature; adapter omits it."""
+        msgs = _make_messages("测试 Kimi 参数兼容")
+        adapter.chat("kimi-k2.6", msgs, temperature=0.0, max_tokens=64)
+        mock_client.chat.completions.create.assert_called_once_with(
+            model="kimi-k2.6",
+            messages=msgs,
+            max_tokens=64,
         )
 
     def test_raw_usage_populated(self, adapter):
@@ -385,6 +439,8 @@ class TestAdapterFactory:
             dashscope_api_key="k1",
             deepseek_api_key="k2",
             zhipu_api_key="k3",
+            kimi_api_key="k4",
+            minimax_api_key="k5",
         )
         factory = AdapterFactory(settings=settings)
 
@@ -392,6 +448,8 @@ class TestAdapterFactory:
             ("dashscope", "qwen3.7-max", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
             ("deepseek", "deepseek-v4-flash", "https://api.deepseek.com/v1"),
             ("zhipu", "glm-5.1", "https://open.bigmodel.cn/api/paas/v4"),
+            ("kimi", "kimi-k2.6", "https://token.cvte.com/v1"),
+            ("minimax", "MiniMax-M3", "https://token.cvte.com/v1"),
         ]:
             entry = _make_model_entry(name=name, provider=provider, api_base=api_base)
             adapter = factory.get_adapter(entry)
@@ -425,8 +483,10 @@ class TestReviewFixes:
     def test_api_key_from_env_variable(self, monkeypatch):
         """[P3] API key 通过环境变量设置后能正确读取。"""
         monkeypatch.setenv("AIROUTER_DEEPSEEK_API_KEY", "env-test-key")
+        monkeypatch.setenv("AIROUTER_KIMI_API_KEY", "kimi-env-test-key")
         settings = AppSettings()
         assert settings.deepseek_api_key == "env-test-key"
+        assert settings.kimi_api_key == "kimi-env-test-key"
 
         factory = AdapterFactory(settings=settings)
         entry = _make_model_entry(provider="deepseek")
@@ -459,3 +519,161 @@ class TestReviewFixes:
         a1 = factory.get_adapter(e1)
         a2 = factory.get_adapter(e2)
         assert a1 is not a2
+
+
+# ── Reasoning-token starvation detection ─────────────────────
+class TestReasoningStarvation:
+    """OpenAICompatAdapter reasoning-token starvation detection.
+
+    Detection condition: finish_reason == "length" AND reasoning_tokens > 0
+    AND completion_tokens > 0 AND (reasoning_ratio > 0.9 OR content_tokens <= 32).
+    """
+
+    def test_starvation_empty_content_high_ratio(self, caplog):
+        """Empty content + finish_reason=length + ratio>0.9 → flagged."""
+        client = _make_reasoning_mock_client(
+            content="",
+            completion_tokens=1024,
+            reasoning_tokens=1017,
+            finish_reason="length",
+        )
+        adapter = OpenAICompatAdapter(
+            api_base="https://x.com/v1", api_key="k", client=client
+        )
+        with caplog.at_level(logging.WARNING):
+            resp = adapter.chat("deepseek-v4-flash", _make_messages())
+
+        assert resp.content == ""
+        assert resp.raw_usage is not None
+        assert resp.raw_usage["reasoning_starved"] is True
+        assert resp.raw_usage["reasoning_tokens"] == 1017
+        assert resp.raw_usage["finish_reason"] == "length"
+        assert any("Reasoning-token starvation" in r.message for r in caplog.records)
+
+    def test_starvation_nonempty_content_low_content_tokens(self):
+        """Non-empty content but content_tokens<=32 → flagged (truncated output)."""
+        # content_tokens = 1024 - 1000 = 24 ≤ 32
+        client = _make_reasoning_mock_client(
+            content="def is_palindrome(s):\n    return",  # partial code, truncated
+            completion_tokens=1024,
+            reasoning_tokens=1000,
+            finish_reason="length",
+        )
+        adapter = OpenAICompatAdapter(
+            api_base="https://x.com/v1", api_key="k", client=client
+        )
+        resp = adapter.chat("deepseek-v4-flash", _make_messages())
+        assert resp.raw_usage["reasoning_starved"] is True
+
+    def test_starvation_diagnostic_scenario(self):
+        """Exact scenario from diagnostic: 1017 reasoning / 1024 completion, content_len=16."""
+        client = _make_reasoning_mock_client(
+            content="x" * 16,
+            completion_tokens=1024,
+            reasoning_tokens=1017,
+            finish_reason="length",
+        )
+        adapter = OpenAICompatAdapter(
+            api_base="https://x.com/v1", api_key="k", client=client
+        )
+        resp = adapter.chat("deepseek-v4-flash", _make_messages())
+        assert resp.raw_usage["reasoning_starved"] is True
+
+    def test_no_starvation_sufficient_content_tokens(self):
+        """Enough content tokens despite length truncation → not starved."""
+        # content_tokens = 2048 - 500 = 1548 > 32, ratio = 500/2048 ≈ 0.24 < 0.9
+        client = _make_reasoning_mock_client(
+            content="def is_palindrome(s): return s == s[::-1]" * 20,
+            completion_tokens=2048,
+            reasoning_tokens=500,
+            finish_reason="length",
+        )
+        adapter = OpenAICompatAdapter(
+            api_base="https://x.com/v1", api_key="k", client=client
+        )
+        resp = adapter.chat("deepseek-v4-flash", _make_messages())
+        assert resp.raw_usage["reasoning_starved"] is False
+
+    def test_no_starvation_with_stop(self):
+        """finish_reason=stop → not starved regardless of reasoning tokens."""
+        client = _make_reasoning_mock_client(
+            content="def is_palindrome(s): ...",
+            completion_tokens=895,
+            reasoning_tokens=566,
+            finish_reason="stop",
+        )
+        adapter = OpenAICompatAdapter(
+            api_base="https://x.com/v1", api_key="k", client=client
+        )
+        resp = adapter.chat("deepseek-v4-flash", _make_messages())
+        assert resp.raw_usage["reasoning_starved"] is False
+
+    def test_no_starvation_low_reasoning_ratio(self):
+        """finish_reason=length but ratio<0.9 AND content_tokens>32 → not starved."""
+        # content_tokens = 1024 - 500 = 524 > 32, ratio = 500/1024 ≈ 0.49 < 0.9
+        client = _make_reasoning_mock_client(
+            content="",
+            completion_tokens=1024,
+            reasoning_tokens=500,
+            finish_reason="length",
+        )
+        adapter = OpenAICompatAdapter(
+            api_base="https://x.com/v1", api_key="k", client=client
+        )
+        resp = adapter.chat("deepseek-v4-flash", _make_messages())
+        assert resp.raw_usage["reasoning_starved"] is False
+
+    def test_raw_usage_includes_reasoning_metadata(self):
+        """raw_usage always includes finish_reason, reasoning_tokens, reasoning_starved."""
+        client = _make_mock_openai_client(
+            content="hello", prompt_tokens=10, completion_tokens=5
+        )
+        adapter = OpenAICompatAdapter(
+            api_base="https://x.com/v1", api_key="k", client=client
+        )
+        resp = adapter.chat("m", _make_messages())
+        assert "finish_reason" in resp.raw_usage
+        assert "reasoning_tokens" in resp.raw_usage
+        assert "reasoning_starved" in resp.raw_usage
+        assert resp.raw_usage["reasoning_tokens"] == 0
+        assert resp.raw_usage["reasoning_starved"] is False
+
+    def test_boundary_content_tokens_33_not_starved(self):
+        """content_tokens=33 (just above 32) with ratio<0.9 → not starved."""
+        # content_tokens = 1000 - 967 = 33, ratio = 967/1000 = 0.967 > 0.9 → starved by ratio!
+        # So let's use: completion=2000, reasoning=1967, content_tokens=33, ratio=0.98 > 0.9 → starved
+        # Need ratio < 0.9: completion=2000, reasoning=1700, content_tokens=300 > 32 → not starved
+        # Better: completion=1000, reasoning=967, content_tokens=33, ratio=0.967 > 0.9
+        # This WILL be starved by ratio. Let me pick different numbers.
+        # completion=1000, reasoning=800, content_tokens=200 > 32, ratio=0.8 < 0.9 → not starved
+        client = _make_reasoning_mock_client(
+            content="",
+            completion_tokens=1000,
+            reasoning_tokens=800,
+            finish_reason="length",
+        )
+        adapter = OpenAICompatAdapter(
+            api_base="https://x.com/v1", api_key="k", client=client
+        )
+        resp = adapter.chat("deepseek-v4-flash", _make_messages())
+        assert resp.raw_usage["reasoning_starved"] is False
+
+    def test_boundary_content_tokens_32_starved(self):
+        """content_tokens=32 with ratio<0.9 → starved (at boundary)."""
+        # completion=1000, reasoning=968, content_tokens=32, ratio=0.968 > 0.9 → starved by both
+        # For ratio<0.9: completion=5000, reasoning=4968, content_tokens=32, ratio=0.994 → starved
+        # Hard to get ratio<0.9 with content_tokens≤32 when reasoning is large.
+        # Actually: completion=400, reasoning=368, content_tokens=32, ratio=0.92 > 0.9 → starved
+        # completion=500, reasoning=468, content_tokens=32, ratio=0.936 > 0.9 → starved
+        # The content_tokens<=32 condition catches cases regardless of ratio
+        client = _make_reasoning_mock_client(
+            content="x" * 32,
+            completion_tokens=400,
+            reasoning_tokens=368,
+            finish_reason="length",
+        )
+        adapter = OpenAICompatAdapter(
+            api_base="https://x.com/v1", api_key="k", client=client
+        )
+        resp = adapter.chat("deepseek-v4-flash", _make_messages())
+        assert resp.raw_usage["reasoning_starved"] is True

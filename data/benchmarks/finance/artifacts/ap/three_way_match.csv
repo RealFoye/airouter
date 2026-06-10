@@ -1,0 +1,7 @@
+contract_id,po_id,invoice_no,vendor,contract_amount_ex_tax,tax_rate,invoice_amount_inc_tax,received_qty,contract_qty,payment_condition,acceptance_status
+CT-2026-014,PO-5001,AP-9001,Huaxin Cloud,120000.0,0.06,63600.0,,,50% after acceptance,accepted
+CT-2026-015,PO-5002,AP-9002,Anji Furniture,64000.0,0.13,72800.0,200,200,100% after delivery,accepted
+CT-2026-016,PO-5003,AP-9003,Nanfang Tech,50000.0,0.06,53000.0,,,after acceptance,vendor mismatch: contract vendor is Nanfang Consulting
+CT-2026-017,PO-5004,AP-9004,Yida Hardware,98000.0,0.13,110740.0,96,100,pay by accepted quantity,accepted 96 units
+CT-2026-018,PO-5005,AP-9005,North Star SaaS,240000.0,0.06,63600.0,,,25% signing prepayment,contract signed
+CT-2026-019,PO-5006,AP-9006,Donghai Logistics,30000.0,0.09,32700.0,,,after acceptance,not accepted

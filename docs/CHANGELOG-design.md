@@ -91,7 +91,13 @@
 | 81 | 优化引擎 | Review 三轮修复：requires_approval 按建议后方案重新判断 + 汇总逻辑抽取 + Engine 参数校验 | 修正 |
 | 82 | 优化引擎 | Review 四轮修复：审批提示浮到 CLI 顶层 + budget_status 用真实计算 + Rich 表审批标签 | 修正 |
 | 83 | Benchmark | Level 1 离线规则 Benchmark：40 条 YAML case + 6 指标 + CLI + 零 API 成本 | 新增 |
-| 84 | Benchmark | Level 2 模型质量 Benchmark：30 条 case × 3 模型 + auto-score + JSONL 断点续跑 | 新增 |
+| 84 | Benchmark | Level 2 模型质量 Benchmark：30 条 case × 5 模型 + auto-score + JSONL 断点续跑 | 新增 |
+| 85 | Benchmark | Level 3 策略回测 Reporter：纯成本模拟 + 降级分类 + PinchBench 方法论参考 | 新增 |
+| 86 | Adapter | Reasoning-token starvation 检测 + L2 case max_tokens 提升 | 修正 |
+| 87 | 成本模型 | 用 CCH usage CSV 校准 5 个模型真实等效单价，修正 DeepSeek/Qwen 成本偏差 | 修正 |
+| 88 | Benchmark | L2 auto-score 关键词修正：BA-LOGIC-002 / CR-PERF-002 离线重评分 | 修正 |
+| 89 | Benchmark | L2 评估体系重构：Auto-score 改进 + Absolute Judge + Pairwise 盲评，三层评估，1050/1050 成功 | 重大新增 |
+| 90 | Benchmark | Finance Judge 辅助审计：MiniMax-M3 独立评分 + 规则分对比 + 幻觉风险检测 + --judge-existing CLI | 新增 |
 
 ---
 
@@ -686,12 +692,12 @@ route_cache_key = hash(
 **原来：**
 6类 × 20+条 × 5模型 = **600+次API调用**，加上Context Rot还要更多。
 
-**改为：** 三级Benchmark，总计**~260次调用**：
+**改为：** 三级Benchmark，总计**~195次调用**：
 
 | 层级 | 调用量 | 目的 |
 |------|--------|------|
 | Level 1 | 0次 | 100条离线规则测试（分类准确率、Tier推荐准确率） |
-| Level 2 | ~115次 | 30条×3代表模型 + 5条×5模型横评 |
+| Level 2 | ~150次 | 30条×5模型全量横评 |
 | Level 3 | 复用L2 | 路由策略回测（全程Tier 1 vs 智能路由） |
 | Context Rot | ~45次 | 3模型×3任务×5长度梯度 |
 
@@ -1513,14 +1519,14 @@ Week 1 第二轮审查发现 quality_loss 公式错误，并确立了 cost/quali
 
 ---
 
-### #84 Level 2 模型质量 Benchmark：30 条 case × 3 模型 + auto-score + JSONL 断点续跑
+### #84 Level 2 模型质量 Benchmark：30 条 case × 5 模型 + auto-score + JSONL 断点续跑
 
 **原来怎么做：**
 - Level 2 计划 Week 3 实现，包含 LLM-as-Judge + 代码执行 + DB 落库
 - 与 Level 1 共享 runner，无独立 executor 层
 
 **现在改成什么：**
-- MVP 版本提前实现：30 条核心 case × 3 模型（qwen3.7-max / qwen3.7-plus / deepseek-v4-flash）
+- MVP 版本提前实现：30 条核心 case × 5 模型（qwen3.7-max / deepseek-v4-pro / qwen3.7-plus / glm-5.1 / deepseek-v4-flash）
 - 只做 auto-score（AST + 结构检查 + 关键词匹配），不执行模型生成代码，不做 LLM-as-Judge
 - 新增 ModelExecutor 层：通过 AdapterFactory 调用模型，force_mock=True 默认安全
 - 文件态断点续跑：JSONL 结果文件（source of truth）+ JSON 状态文件 + 原子写入
@@ -1536,7 +1542,7 @@ Week 1 第二轮审查发现 quality_loss 公式错误，并确立了 cost/quali
 **改了之后好在哪：**
 - 可验证模型实际输出质量，弥补 L1 只做离线规则验证的不足
 - 6 类评分函数覆盖所有任务类型（codegen/review/bug/doc/refactor/architecture）
-- 断点续跑支持中断恢复，避免 90 次 API 调用因网络中断而浪费
+- 断点续跑支持中断恢复，避免 150 次 API 调用因网络中断而浪费
 - mock 模式零成本开发测试，--real-api 显式开启真实调用
 - JSONL 去重 + state 原子写入保证崩溃一致性
 
@@ -1552,6 +1558,338 @@ Week 1 第二轮审查发现 quality_loss 公式错误，并确立了 cost/quali
 - `tests/unit/test_executor.py`：9 个执行器测试
 - `tests/unit/test_benchmark_l2.py`：15 个 Runner 测试
 - `tests/integration/test_benchmark_level2.py`：8 个集成测试
+
+---
+
+### #85 Level 3 策略回测 Reporter：纯成本模拟 + 降级分类
+
+**变更性质：** 新增
+
+**原来怎么做：**
+Level 3 尚未实现，CLI 返回 "尚未实现"。
+
+**现在改成什么：**
+Level 3 纯离线回测：对 L1 (40 case) + L2 (30 case) 的每个 case 调用 Router.route()，对比 Router 推荐成本 vs Baseline (qwen3.7-max) 成本。零 API 调用。
+
+**关键设计决定：**
+1. **质量模式 `routing_prior`**：MVP 只使用 Router 先验风险标注（risk_level、quality_loss_vs_baseline、requires_human_review），不做实测质量评估
+2. **Baseline 强制 Tier 1**：Reporter __init__ 校验 baseline model 必须存在且为 Tier 1，否则 raise ValueError
+3. **无候选不算省钱**：executor=None 时 effective_router_cost=baseline_cost，savings=0
+4. **savings 允许负数**：Router 比 baseline 更贵时暴露为 overspend
+5. **降级三态分类**：none（Tier 1 或无候选）、safe（Tier>1 + LOW risk + 无审批 + SIMPLE/MODERATE + quality_loss≤0.15）、risky（Tier>1 但不满足 safe）
+6. **`has_executable_model` 和 `requires_human_review` 语义独立**：有候选 ≠ 可自动执行
+7. **Summary 成本汇总基于 `effective_router_cost`**，不用 raw_router_cost
+8. **case_set=all/l1/l2**：可选只跑 L1、只跑 L2、或全部
+9. **`--cases` 参数在 L3 被拒绝**：提示使用 --case-set
+10. **JSON 模式错误输出统一 `_exit_error()` helper**：stdout 为空，stderr 为结构化 JSON
+
+**PinchBench 方法论参考：**
+- [PinchBench skill repo](https://github.com/pinchbench/skill)
+- [PinchBench about/tasks](https://pinchbench.com/about)
+- 借鉴"真实任务 + 可评分 + 可追踪"方法论，case 与评分逻辑均自研
+- AI Router Benchmark 不评估通用 agent 能力，而是评估路由决策质量与成本节省
+
+**为什么改：**
+项目核心问题是"智能路由比全程 Tier 1 省多少钱"。L3 直接回答这个问题，且零 API 成本。
+
+**改后好在哪：**
+- 直接产出成本对比报告，可演示
+- safe/risky 降级建议帮助理解哪些任务可以安全降级
+- 明确的 disclaimer 标注质量为先验估计，非实测
+
+**文件清单：**
+- `src/airouter/engine/benchmark/reporter.py`：Level3BacktestReporter
+- `src/airouter/engine/benchmark/runner.py`：Level3BenchmarkRunner
+- `src/airouter/engine/benchmark/schemas.py`：BacktestCase / BacktestResult / BacktestSummary
+- `src/airouter/cli/benchmark.py`：L3 CLI + _exit_error helper
+- `tests/unit/test_reporter.py`：20 个 reporter 测试
+- `tests/unit/test_benchmark_l3.py`：14 个 runner 测试
+- `tests/integration/test_benchmark_level3.py`：8 个集成测试
+
+---
+
+## #86 Reasoning-token starvation 检测 + L2 case max_tokens 提升
+
+**模块**：Adapter / Benchmark  
+**变更性质**：修正  
+**时间**：2026-06-08
+
+### 原来怎么做
+
+`OpenAICompatAdapter` 只读取 `choice.message.content` 和 `usage.prompt_tokens`/`usage.completion_tokens`，忽略 `finish_reason`、`reasoning_content`、`completion_tokens_details.reasoning_tokens`。
+
+L2 benchmark cases 的 `max_tokens` 按任务复杂度设定：SIMPLE=1024, MODERATE=2048, COMPLEX=4096。
+
+### 为什么改
+
+deepseek-v4-flash 等推理模型在 `reasoning_content` 中做 chain-of-thought 思考，`reasoning_tokens` 计入 `completion_tokens`，共享 `max_tokens` 预算。实测 3 次运行（同 prompt，temperature=0.0）：
+
+| 运行 | finish_reason | completion_tokens | reasoning_tokens | content_tokens | content_len |
+|------|--------------|-------------------|------------------|----------------|-------------|
+| #1 | length | 1024 | 297 | 727 | 2065 chars |
+| #2 | stop | 895 | 566 | 329 | 1040 chars |
+| #3 | **length** | **1024** | **1017** | **7** | **16 chars** |
+
+Run 3 中 reasoning_tokens=1017 占满 1024 预算，实际内容仅 16 chars。L2 smoke test 中 deepseek-v4-flash 返回空内容（0 bytes）正是此原因。
+
+### 改成什么
+
+1. **L2 case max_tokens 提升**：所有 case 至少 3072（保留 RF-EXTRACT-001），其余统一提升到 4096。给 reasoning + content 留足空间
+2. **Adapter reasoning-starved 检测（token-based）**：当 `finish_reason="length"` AND `reasoning_tokens > 0` AND `completion_tokens > 0` AND（`reasoning_tokens / completion_tokens > 0.9` OR `content_tokens <= 32`）时，标注 `reasoning_starved: true` 并 log warning。使用 token-based 条件而非 char-based，确保诊断报告中 `content_len=16` 这类场景也能被标记
+3. **raw_usage 增强**：始终包含 `finish_reason`、`reasoning_tokens`、`reasoning_starved` 字段
+4. **诊断信息传递**：`ExecutorResult` 增加 `raw_usage` 字段，`L2CaseResult` 增加 `response_metadata` 字段。runner 写入 JSONL 时传递 `finish_reason` / `reasoning_tokens` / `reasoning_starved`，便于全量运行后复盘
+
+### 改后好在哪
+
+- 推理模型不再因 max_tokens 过低而饿死内容（smoke: deepseek-v4-flash 0.25→0.94）
+- Adapter 层主动检测并标注 reasoning starvation（token-based），避免下游误判为"模型质量差"
+- `results.jsonl` 中每条记录都带有 `response_metadata`，包含 reasoning token 分布和 starvation 标记
+- 本次 smoke 覆盖的 3 个 CCH gateway 模型（qwen3.7-max、qwen3.7-plus、deepseek-v4-flash）均返回了 reasoning token；deepseek-v4-pro / glm-5.1 待 5 模型小批量验证
+
+### 涉及文件
+
+- `data/benchmarks/level2/router_quality_cases.yaml`：max_tokens 提升
+- `src/airouter/adapters/openai_compat.py`：reasoning-starved 检测 + raw_usage 增强
+- `src/airouter/engine/benchmark/schemas.py`：ExecutorResult.raw_usage + L2CaseResult.response_metadata
+- `src/airouter/engine/benchmark/executor.py`：传递 raw_usage
+- `src/airouter/engine/benchmark/runner.py`：构建 response_metadata 写入 JSONL
+- `tests/unit/test_adapters.py`：9 个 reasoning-starvation 测试（token-based）
+- `docs/pitfalls.md`：坑 #33
+
+---
+
+## #87 CCH usage CSV 校准 5 个模型真实等效单价
+
+**模块**：成本模型 / 模型注册表  
+**变更性质**：修正  
+**时间**：2026-06-08
+
+### 原来怎么做
+
+`data/models.yaml` 使用 CCH 页面展示价格作为初始配置。L2 15-pair smoke 后，项目侧 `cost_cny` 显示总成本约 ¥1.14，并据此判断 qwen3.7-plus 性价比最高、DeepSeek 成本接近 qwen3.7-plus。
+
+### 发现了什么
+
+导出 CCH 后台 `usage-logs-2026-06-08-200705.csv` 后，用时间窗口 + 模型名 + input/output tokens 精确匹配到 L2 smoke 的 15 条调用：
+
+- 15/15 全部匹配
+- 这 15 条 `Cache Read` / `Cache Write 5m` / `Cache Write 1h` 全部为 0
+- 差异不是缓存命中造成的，而是项目价格表与后台实际等效价格不一致
+- CSV 的 `Cost (USD)` 是后台真实成本字段，项目侧按 7.2 汇率折算为 CNY 做校准
+
+### 校准后的等效价格
+
+| 模型 | input CNY / 1M | output CNY / 1M | 变化方向 |
+|------|---------------:|----------------:|----------|
+| deepseek-v4-flash | 1.008 | 2.016 | 大幅下调 |
+| deepseek-v4-pro | 3.132 | 6.264 | 大幅下调 |
+| glm-5.1 | 10.08 | 28.8 | 基本接近 |
+| qwen3.7-max | 18.0 | 54.0 | 上调 |
+| qwen3.7-plus | 1.944 | 8.64 | output 明显上调 |
+
+### 为什么改
+
+Router/Benchmark/L3 Reporter 都依赖 `models.yaml` 的价格进行成本比较。旧价格会导致：
+
+- 高估 DeepSeek 成本，低估 DeepSeek 的性价比
+- 低估 Qwen 成本，尤其低估 qwen3.7-plus 的 output/reasoning 成本
+- 总成本可能因为误差互相抵消而看起来接近，但单模型排序会错，直接影响路由策略
+
+### 改成什么
+
+`data/models.yaml` 中 5 个 CCH 模型的 `input_price_per_1k` / `output_price_per_1k` 改为后台 CSV 反推的等效价（CNY per 1K tokens）：
+
+- qwen3.7-max: `0.018 / 0.054`
+- deepseek-v4-pro: `0.003132 / 0.006264`
+- qwen3.7-plus: `0.001944 / 0.00864`
+- glm-5.1: `0.01008 / 0.0288`
+- deepseek-v4-flash: `0.001008 / 0.002016`
+
+### 注意
+
+这次 15-pair prompt 输入很短，且无缓存命中；校准结果适合当前 L2 Benchmark 和短输入任务成本估算。长上下文、多轮、缓存读写场景仍需后续用后台账单继续校准 Prompt Caching 公式。
+
+价格校准后，旧的 `runs/benchmarks/level2/*/results.jsonl` 中已经写入的 `cost_cny` 不会自动重算。继续全量 L2 时应开启新 run；如果要 resume 旧 run，必须先对旧 JSONL 进行 reprice，否则 summary 会混用旧价格和新价格。
+
+---
+
+### #88 L2 auto-score 关键词修正：BA-LOGIC-002 / CR-PERF-002 离线重评分
+
+**模块**：Benchmark / 评分器  
+**变更性质**：修正  
+**时间**：2026-06-08
+
+#### 原来怎么做
+
+L2 150-pair 全量跑完后，发现 6 个低分 pair 是评分器关键词覆盖不足，不是模型真的没发现问题：
+
+- **BA-LOGIC-002**（5 个模型全 0.50）：`expected_issues: ["integer_overflow"]`，但 case 的真实 bug 是逻辑错误（`total * 10 + price` 应改为 `total += price`），不是整数溢出。模型正确识别了问题，scorer 用 `ISSUE_KEYWORDS["integer_overflow"]`（overflow/溢出/integer）去匹配输出，自然找不到
+- **CR-PERF-002 x deepseek-v4-pro**（0.30）：`expected_issues: ["memory_leak"]`，但 case 的真实问题是资源泄漏（未关闭的 Session 和文件句柄），不是内存泄漏。模型输出中明确提到了"文件句柄泄漏""Session 泄漏""没有 close"，但 scorer 用 `ISSUE_KEYWORDS["memory_leak"]`（memory leak/内存泄漏/unclosed/未关闭）匹配不到"资源泄漏""文件句柄""session.close"等关键词
+
+#### 改成什么
+
+1. **ISSUE_KEYWORDS 新增两个 issue 类型**：
+   - `logic_error`：逻辑错误、累加、加法、sum、total +=、* 10、乘以 10、should be +、应该用+、改为+
+   - `resource_leak`：资源泄漏、文件句柄、文件描述符、file descriptor、session.close、close()、未释放、连接池、socket、上下文管理器、context manager、with open、finally
+
+2. **Case 定义修正**：
+   - BA-LOGIC-002：`expected_issues` 从 `["integer_overflow"]` 改为 `["logic_error"]`
+   - CR-PERF-002：`expected_issues` 从 `["memory_leak"]` 改为 `["resource_leak"]`，`must_have.resource_leak` 关键词扩展
+
+3. **离线重评分**：用 `raw_outputs/` 和更新后的 scorer 重新计算分数，写入 `results.jsonl`。不调用任何真实 API
+
+#### 改后好在哪
+
+| Pair | 旧分 | 新分 | 变化 |
+|------|-----:|-----:|------|
+| BA-LOGIC-002 × 5 models | 0.500 | 1.000 | +0.500 |
+| CR-PERF-002 × deepseek-v4-pro | 0.300 | 1.000 | +0.700 |
+
+- 模型排名不变（qwen3.7-max 和 deepseek-v4-flash 并列 0.961），但整体质量更高
+- Score distribution：1.00 分从 101 pairs (67%) 升到 107 pairs (71%)，<0.50 从 1 降到 0
+- **教训**：auto-score 的关键词覆盖必须和 case 的真实 bug 类型对齐。expected_issues 写错了，scorer 就检查错了维度。每次新增 case 时应该确认 ISSUE_KEYWORDS 有对应条目
+
+#### 涉及文件
+
+- `src/airouter/engine/benchmark/evaluator.py`：ISSUE_KEYWORDS 新增 logic_error + resource_leak
+- `data/benchmarks/level2/router_quality_cases.yaml`：BA-LOGIC-002 + CR-PERF-002 case 定义修正
+- `runs/benchmarks/level2/20260608_202410/results.jsonl`：离线重评分（6 条更新）
+
+---
+
+### #89 L2 评估体系重构：Auto-score 改进 + Absolute Judge + Pairwise 盲评
+
+**原来：**
+- L2 Benchmark 只有 auto-score（规则评分）和一个粗糙的 LLM Judge
+- 旧版 LLM Judge 使用通用 4 维度 prompt，8000 chars 截断，91/150 JSON 解析失败
+- 无 Pairwise 对比，无法消除评分偏差
+- 架构深度评分用纯长度桶（<100/100-500/>500）
+
+**改为：**
+三层评估体系：
+
+| 层级 | 方法 | 调用量 | 成功率 |
+|------|------|:---:|:---:|
+| Auto-score | AST + 关键词 + 7 维度架构深度 | 150 | 100% |
+| Absolute Judge | 2 个 Judge 独立评分，6 种 task-type 专用 rubric | 300 | 100% |
+| Pairwise Judge | A/B 盲评，隐藏模型名，随机顺序 | 600 | 100% |
+| **合计** | | **1050** | **100%** |
+
+**为什么改：**
+1. 旧版 LLM Judge 失败率 60%（91/150 JSON 解析失败），不可用
+2. 通用 prompt 区分度不够，所有模型得分接近
+3. 单一 Judge 存在偏见风险（qwen3.7-max 评自家模型）
+4. 没有盲评机制，无法验证 Judge 一致性
+
+**改了之后好在哪：**
+- 300/300 Absolute Judge 成功，600/600 Pairwise 成功，0 失败
+- Task-type 专用 rubric（CODE_GENERATION 用 correctness/code_quality/error_handling，CODE_REVIEW 用 issue_detection/fix_suggestion/severity_accuracy 等）
+- 双 Judge 交叉验证 + A/B 盲评一致率 75%
+- 截断惩罚：model_truncated 时 auto_score cap 0.65
+- JSONL resume + 指数退避重试，确保 100% 成功率
+
+**正式评测结果（2026-06-09）：**
+
+| 排名 | Auto-score | Absolute Judge | Pairwise |
+|:---:|---|---|---|
+| 1 | qwen3.7-max 0.950 | qwen3.7-max 0.976 | qwen3.7-max 73.8% |
+| 2 | deepseek-v4-flash 0.942 | glm-5.1 0.969 | qwen3.7-plus 68.8% |
+| 3 | deepseek-v4-pro 0.942 | qwen3.7-plus 0.963 | glm-5.1 49.2% |
+| 4 | glm-5.1 0.941 | deepseek-v4-flash 0.939 | deepseek-v4-pro 32.9% |
+| 5 | qwen3.7-plus 0.933 | deepseek-v4-pro 0.914 | deepseek-v4-flash 20.0% |
+
+**成本明细：**
+- L2 模型执行：¥9.76（150 calls，无重复）
+- Absolute Judge：¥18.78 unique / ¥36.18 actual（300 unique / 590 calls，290 duplicate）
+- Pairwise Judge：¥49.86 unique / ¥95.55 actual（600 unique / 1,192 calls，592 duplicate）
+- **Unique eval cost：¥78.40（1,050 unique evaluations）**
+- **Actual API spend：¥141.50（1,932 calls，含 resume bug 导致的 882 次重复调用）**
+- **Wasted：¥63.09（resume bug 已修复，未来运行不再重复）**
+- CCH matched：¥83.18（1,136 CSV rows token-level matched）
+
+#### 涉及文件
+
+- `src/airouter/engine/benchmark/judge_prompts.py`：6 种 task-type 专用 rubric（新建）
+- `src/airouter/engine/benchmark/llm_judge_v2.py`：Absolute Judge + JSONL resume + 30000 chars 截断（新建）
+- `src/airouter/engine/benchmark/pairwise_judge.py`：A/B 盲评 + 局部 RNG + 胜率矩阵（新建）
+- `src/airouter/engine/benchmark/evaluator.py`：7 维度架构深度评分 + 截断惩罚 + test_code 执行
+- `src/airouter/engine/benchmark/runner.py`：并发化 + run_with_judges() 全流程
+- `src/airouter/engine/benchmark/schemas.py`：JudgeResult / PairwiseResult 等
+- `src/airouter/cli/benchmark.py`：--judge / --skip-pairwise / --judge-workers
+- `data/benchmarks/level2/router_quality_cases.yaml`：5 个 case prompt 修复 + max_tokens 调整
+- `docs/model-selection-report.md`：用新数据完整重写
+
+---
+
+### #90 Finance Benchmark 评分口径与诊断报告修正
+
+**原来：**
+- `POLICY_QA` 的 `amount_accuracy` 固定为 0，但报告把这些 0 计入全局金额准确率，导致金额能力被误判偏低
+- `FIN-BUD-002` 这类 Top-N 预算题只按固定 `top_items` 结构匹配，模型输出 `{"R&D Cloud": 48000}` 会被误判金额错误
+- `FIN-TAB-002` 依赖 CSV 中的 `dept` 字段，但 Runner 只发送 `input_context + prompt`，没有把 artifact 内容传给模型
+- 证据评分要求模型引用上下文里的几乎所有业务 ID，导致证据得分被系统性压低
+- 报告只有低分 case，没有题目设计总览、模型错误画像、优势画像和运行层异常归因
+
+**改为：**
+- `amount_accuracy` 增加 applicability 语义：不适用维度不参与金额准确率均值，也不惩罚 overall
+- POLICY_QA 如果有明确金额答案，仍计算可展示的金额正确性，但 overall 继续使用 POLICY_QA 权重
+- Top-N 金额匹配支持扁平 composite key，例如 `R&D Cloud: 48000` 可匹配 `dept=R&D/category=Cloud/variance_cny=48000`
+- Finance Runner 后续真实运行会自动读取 case artifacts，把 CSV/政策文件内容注入 prompt
+- 新增 `rescore_run()`：基于已有 `raw_outputs/` 离线重评分，不重新调用真实 API
+- 中文报告新增题目设计总览、Case 数/Pair 数分离、模型错误画像、模型优势画像、推理 token 饥饿/截断归因
+
+**本次离线重评分结果（run `20260609_170910`）：**
+
+| 排名 | 模型 | 综合分 | 金额准确率（适用题） |
+|:---:|---|---:|---:|
+| 1 | qwen3.7-plus | 0.836 | 0.81 |
+| 2 | qwen3.7-max | 0.809 | 0.78 |
+| 3 | deepseek-v4-pro | 0.792 | 0.72 |
+| 4 | deepseek-v4-flash | 0.788 | 0.76 |
+| 5 | glm-5.1 | 0.769 | 0.67 |
+
+**注意：**
+本次报告由旧 run 的 `raw_outputs/` 离线重评分生成，未重新调用 API。该 run 的原始输出生成于 artifact 自动注入修复前，因此依赖 CSV 字段的 case（如 `FIN-TAB-002`）应谨慎解读。后续真实重跑会自动把 artifact 内容加入 prompt。
+
+#### 涉及文件
+
+- `src/airouter/engine/benchmark/finance_evaluator.py`：金额适用性、Top-N 宽松匹配、decision 同义词、证据评分修正
+- `src/airouter/engine/benchmark/finance_runner.py`：artifact 注入 + `rescore_run()`
+- `src/airouter/engine/benchmark/finance_report.py`：中文诊断报告增强
+- `src/airouter/engine/benchmark/finance_schemas.py`：category pair 数、金额适用 pair、case catalog、run notes
+- `runs/benchmarks/finance/20260609_170910/results.rescored.jsonl`：离线重评分结果
+- `runs/benchmarks/finance/20260609_170910/finance_report.md`：新版中文报告
+
+### #90 Finance Judge 辅助审计：MiniMax-M3 独立评分
+
+**原来：**
+- Finance Benchmark 只有规则评分（金额准确率、发现召回率、决策准确率、证据质量）
+- 规则评分无法判断解释质量、证据充分性、幻觉风险
+- 没有独立审计层来验证规则评分的可信度
+
+**改为：**
+- 新增 MiniMax-M3 辅助 Judge 层，对已有 `raw_outputs/` 进行独立评分
+- 规则评分仍是主分数，Judge 只做辅助审计，不覆盖排名
+- 5 维度加权评分（`FINANCE_DATA_PROCESSING` / `FINANCE_POLICY_QA` 两套 rubric）
+- 收集 `red_flags`（8 种固定枚举：幻觉数据、弱证据、缺失来源等）
+- 程序化计算 `rule_score_disagreement`（rule_too_high / rule_too_low / agree / unclear）
+- 报告新增"附录 A：LLM Judge 辅助审计"章节，含规则分 vs Judge 分对比、分类别对比、风险案例、排名一致性（Spearman）
+- CLI 新增 `--judge-existing` 路径，不重跑被测模型，只读已有 raw_outputs
+- 支持 `--limit` 做 smoke 测试，smoke 输出独立文件，不覆盖正式报告
+
+**为什么改：**
+规则评分对明确真值（金额、Top-N、制度命中）判断准确，但对解释质量、证据链完整性、幻觉风险的判断能力有限。MiniMax-M3 作为独立审计层可以发现规则漏判的质量问题，同时不改变主排名，保证结果稳定性。
+
+#### 涉及文件
+
+- `src/airouter/engine/benchmark/finance_judge.py`（新建）：Finance Judge 核心模块
+- `src/airouter/engine/benchmark/judge_prompts.py`：+2 task type +6 rubric +red_flags 枚举
+- `src/airouter/engine/benchmark/schemas.py`：JudgeResult +3 optional 字段
+- `src/airouter/engine/benchmark/finance_report.py`：Judge 审计章节 + Spearman 相关系数
+- `src/airouter/engine/benchmark/finance_evaluator.py`：result-type 决策评分 + JSON array 聚合
+- `src/airouter/cli/benchmark.py`：`--judge-existing` CLI 路径
+- `tests/unit/test_finance_judge.py`（新建）：44 个单元测试
+- `tests/integration/test_benchmark_finance.py`：+2 个 CLI 集成测试
 
 ---
 

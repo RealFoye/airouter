@@ -25,6 +25,8 @@ class AdapterFactory:
         "dashscope": "dashscope_api_key",
         "deepseek": "deepseek_api_key",
         "zhipu": "zhipu_api_key",
+        "kimi": "kimi_api_key",
+        "minimax": "minimax_api_key",
     }
 
     def __init__(self, settings: AppSettings | None = None):

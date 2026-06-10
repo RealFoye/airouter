@@ -47,11 +47,12 @@ class OpenAICompatAdapter(BaseAdapter):
         self, model: str, messages: list[dict], **kwargs: Any
     ) -> AdapterResponse:
         start = time.perf_counter()
+        request_kwargs = self._normalize_kwargs(model, kwargs)
         try:
             response = self._client.chat.completions.create(
                 model=model,
                 messages=messages,  # type: ignore[arg-type]
-                **kwargs,
+                **request_kwargs,
             )
         except AuthenticationError as e:
             raise AdapterAuthError(f"API key 无效: {e}") from e
@@ -72,11 +73,59 @@ class OpenAICompatAdapter(BaseAdapter):
         choice = response.choices[0]
         usage = response.usage
 
+        content = choice.message.content or ""
+        finish_reason = choice.finish_reason
+
+        # Detect reasoning-token starvation (e.g. deepseek-v4-flash).
+        # When reasoning_tokens consume most of max_tokens, actual content
+        # output is truncated and finish_reason="length".
+        reasoning_tokens = 0
+        reasoning_starved = False
+        if usage:
+            usage_dict = usage.model_dump()
+            details = usage_dict.get("completion_tokens_details") or {}
+            reasoning_tokens = details.get("reasoning_tokens") or 0
+            completion_tokens = usage.completion_tokens or 0
+            content_tokens = completion_tokens - reasoning_tokens if completion_tokens > 0 else 0
+            if (
+                finish_reason == "length"
+                and reasoning_tokens > 0
+                and completion_tokens > 0
+                and (reasoning_tokens / completion_tokens > 0.9 or content_tokens <= 32)
+            ):
+                reasoning_starved = True
+                logger.warning(
+                    "Reasoning-token starvation detected: model=%s, "
+                    "reasoning_tokens=%d/%d (content_tokens=%d). "
+                    "Consider increasing max_tokens.",
+                    model, reasoning_tokens, completion_tokens, content_tokens,
+                )
+
+            # Augment raw_usage with finish_reason and reasoning metadata
+            usage_dict["finish_reason"] = finish_reason
+            usage_dict["reasoning_tokens"] = reasoning_tokens
+            usage_dict["reasoning_starved"] = reasoning_starved
+        else:
+            usage_dict = None
+
         return AdapterResponse(
-            content=choice.message.content or "",
+            content=content,
             input_tokens=usage.prompt_tokens if usage else 0,
             output_tokens=usage.completion_tokens if usage else 0,
             latency_ms=elapsed_ms,
             model=model,
-            raw_usage=usage.model_dump() if usage else None,
+            raw_usage=usage_dict,
         )
+
+    def _normalize_kwargs(self, model: str, kwargs: dict[str, Any]) -> dict[str, Any]:
+        """Normalize provider-specific OpenAI-compatible parameters."""
+        request_kwargs = dict(kwargs)
+
+        # CCH kimi-k2.6 currently rejects explicit temperature values, while the
+        # benchmark executor passes temperature=0.0 by default. Omitting the
+        # parameter keeps the call OpenAI-compatible and lets the upstream use
+        # its default.
+        if model.lower().startswith("kimi-"):
+            request_kwargs.pop("temperature", None)
+
+        return request_kwargs

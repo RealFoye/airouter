@@ -846,3 +846,91 @@ Plan-Execute 和 Plan-Execute-Review 虽然满足结构触发条件（COMPLEX/EX
 Analyzer 的 KEYWORD_RULES 中，同一个词可能出现在多个类别中（如"高并发"在 ARCHITECTURE 权重 3），导致某些 prompt 被误分类。例如"实现跨模块的高并发鉴权中间件"中"实现"给 CODE_GENERATION 3 分，"高并发"给 ARCHITECTURE 3 分，平局时 ARCHITECTURE 因字典序靠前而胜出。
 
 **改进：写 benchmark prompt 时避免使用跨类别的高权重关键词。如需明确触发 CODE_GENERATION，去掉"高并发"（ARCHITECTURE 关键词）改用"鉴权中间件"（仅 CODE_GENERATION 关键词）。诊断时对照 KEYWORD_RULES 逐词计算分数，确认分类是否符合预期。**
+
+### 33. Reasoning 模型的 max_tokens 必须同时覆盖推理 token 和内容 token
+
+deepseek-v4-flash 等推理模型会在 `reasoning_content` 中做 chain-of-thought 思考。`reasoning_tokens` 计入 `completion_tokens`，共享 `max_tokens` 预算。实测中模型可能花 1017/1024 tokens 做推理，只剩 7 tokens 给实际内容，导致 `content` 为空且 `finish_reason="length"`。
+
+**现象**：L2 benchmark smoke test 中 deepseek-v4-flash 返回空内容（0 bytes），但 `output_tokens=1024`（= max_tokens），`overall_score=0.25`。
+
+**根因**：`max_tokens=1024` 对推理模型太小。3 次重复运行中，1 次 reasoning_tokens=1017 导致内容被饿死。非确定性，取决于模型推理深度。
+
+**修复**：
+1. L2 case YAML 中 max_tokens 全部提升到 3072-4096，给 reasoning + content 留足空间
+2. `OpenAICompatAdapter` 增加 reasoning-starved 检测（token-based）：当 `finish_reason="length"` + `reasoning_tokens/completion_tokens > 0.9` 或 `content_tokens <= 32` 时，在 `raw_usage` 中标注 `reasoning_starved: true` 并 log warning
+3. `raw_usage` 始终包含 `finish_reason`、`reasoning_tokens`、`reasoning_starved` 字段
+4. `ExecutorResult` 增加 `raw_usage` 字段，`L2CaseResult` 增加 `response_metadata` 字段，runner 写入 JSONL 时传递诊断信息（finish_reason / reasoning_tokens / reasoning_starved）
+
+**教训**：使用推理模型时，max_tokens 必须为 reasoning + content 留出足够空间。不能假设 max_tokens 只用于最终输出。Adapter 层应检测并标注 reasoning starvation（用 token-based 条件，不用 char-based），且诊断信息必须传递到结果文件中，便于全量运行后复盘。
+
+### 34. 项目侧成本估算必须和后台账单对账，不能只信配置页面初始价格
+
+L2 15-pair smoke 后，项目根据 `models.yaml` 算出总成本约 ¥1.14。导出 CCH usage CSV 后发现，后台真实字段是 `Cost (USD)`，15 条调用按时间窗口 + 模型名 + input/output tokens 可全部精确匹配，且 cache read/write 全部为 0。
+
+**现象**：
+- DeepSeek 两个模型后台成本只有项目估算的约 25%-26%
+- qwen3.7-max 后台成本约为项目估算的 1.5 倍
+- qwen3.7-plus 后台成本约为项目估算的 2.3 倍
+- GLM 基本接近
+- 总成本差异只有约 19%，但这是 DeepSeek 高估和 Qwen 低估互相抵消，不代表价格表正确
+
+**根因**：`models.yaml` 使用的是页面展示/初始理解价格，不是用后台真实 usage log 校准后的等效价格。Router 的成本排序看的是单模型价格，不能只看总额接近。
+
+**修复**：用 CCH usage CSV 中无缓存、200 状态记录反推 5 个模型等效 input/output 单价，并更新 `data/models.yaml`。CSV 的 `Cost (USD)` 按 7.2 折 CNY 后校准为项目内部 CNY per 1K 单位。
+
+**注意**：价格校准后不要直接 resume 旧 L2 run。旧 `results.jsonl` 已经固化旧 `cost_cny`，直接续跑会混用旧价格和新价格。要么开新 run 全量跑，要么先写 reprice 脚本重算旧 JSONL。
+
+**教训**：真实 API 接通后必须做一次 billing reconciliation。成本优化系统最怕"总额看着差不多，但单模型价格排序错了"；这会直接误导 Router、Benchmark 和 L3 回测结论。
+
+### 35. Auto-score 关键词必须和 case 的真实 bug 类型对齐
+
+L2 150-pair 全量跑完后，发现 6 个低分 pair 不是模型没发现问题，而是评分器关键词覆盖不足。
+
+**现象**：
+- BA-LOGIC-002（5 个模型全 0.50）：`expected_issues: ["integer_overflow"]`，但 case 的真实 bug 是逻辑错误（`total * 10 + price` 应改为 `total += price`），不是整数溢出。模型正确识别了问题，scorer 用 `ISSUE_KEYWORDS["integer_overflow"]`（overflow/溢出/integer）去匹配输出，自然找不到
+- CR-PERF-002 x deepseek-v4-pro（0.30）：`expected_issues: ["memory_leak"]`，但 case 的真实问题是资源泄漏（未关闭的 Session 和文件句柄），不是内存泄漏。模型输出中明确提到了"文件句柄泄漏""Session 泄漏""没有 close"，但 scorer 用 `ISSUE_KEYWORDS["memory_leak"]`（memory leak/内存泄漏/unclosed/未关闭）匹配不到"资源泄漏""文件句柄""session.close"等关键词
+
+**根因**：`ISSUE_KEYWORDS` 是 scorer 检查模型输出的唯一依据。如果 `expected_issues` 写错了 issue 类型，scorer 就检查错了维度。BA-LOGIC-002 的 case 描述是"乘法代替加法"，但 expected_issues 写的是 integer_overflow（整数溢出）；CR-PERF-002 的 case 描述是"未关闭的 Session 和文件句柄"，但 expected_issues 写的是 memory_leak（内存泄漏）。
+
+**修复**：
+1. `ISSUE_KEYWORDS` 新增两个 issue 类型：`logic_error`（逻辑错误、累加、加法、sum、total +=、* 10 等）和 `resource_leak`（资源泄漏、文件句柄、文件描述符、session.close、close() 等）
+2. BA-LOGIC-002 的 `expected_issues` 改为 `["logic_error"]`
+3. CR-PERF-002 的 `expected_issues` 改为 `["resource_leak"]`，`must_have.resource_leak` 关键词扩展
+4. 离线重评分：用 `raw_outputs/` 和更新后的 scorer 重新计算分数，写入 `results.jsonl`，不调用任何真实 API
+
+**教训**：auto-score 的关键词覆盖必须和 case 的真实 bug 类型对齐。每次新增 case 时应该确认 ISSUE_KEYWORDS 有对应条目。低分 pair 不一定是模型差，可能是评分器没覆盖到正确的维度。离线重评分（re-score）是低成本修复方式，不需要重新调用 API。
+
+### 36. 不适用维度不能当 0 分参与均值
+
+Finance Benchmark 初版报告把 `POLICY_QA` 的 `amount_accuracy=0` 计入全局金额准确率，导致报告显示“金额准确率很低”。但这不是模型算错，而是该维度在部分制度问答题上不适用。
+
+**现象**：
+- 报告显示整体金额准确率 0.66，容易让人误以为模型金额计算能力很差
+- `POLICY_QA` 类别金额准确率显示 0.00，但其中很多 case 根本不考金额
+- 去掉不适用维度后，金额准确率口径明显变化
+
+**根因**：
+评分结果只有 `dimension_scores: dict[str, float]`，没有记录每个维度是否适用。报告层只能机械平均所有 float，把 N/A 错当 0 分。
+
+**修复**：
+1. `finance_auto_score()` 在 `details.dimension_applicability` 中记录每个维度是否适用
+2. 不适用金额维度按 1.0 处理，避免惩罚 overall；报告层按 applicability 过滤，不把它显示成真实金额能力
+3. 报告改为“金额准确率（仅金额适用题）”，并显示适用 pair 数
+
+**教训**：任何多维评分系统都要区分“答错”和“不适用”。N/A 既不能当 0 拉低模型，也不能当 1 冒充能力；正确做法是 overall 不惩罚、报告单独过滤并显示 denominator。
+
+### 37. Benchmark 依赖附件时，必须确认附件内容真的进入 prompt
+
+Finance Benchmark 的 `FIN-TAB-002` 要求按部门汇总费用表，但 `input_context` 里没有部门字段，部门字段只在 `artifacts/expenses/expense_claims_may.csv` 中。初版 Runner 只发送 `input_context + prompt`，没有读取 artifacts，导致模型根本看不到需要的列。
+
+**现象**：
+- 多个模型回答“缺少部门字段，无法按部门汇总”
+- 业务上这是合理回答，却被 expected answer 扣成低分
+
+**根因**：
+Benchmark YAML 中的 `artifacts` 是本地文件路径，不会自动传给大模型。只有 Runner 显式读取文件并拼入 prompt，模型才看得到。
+
+**修复**：
+Finance Runner 的 `_build_messages()` 新增 artifact 注入：对 case.artifacts 中的 CSV/Markdown/政策文件读取文本内容，附加到用户消息中。旧 run 使用 raw outputs 离线重评分时需在报告中标注：这些输出生成于 artifact 注入修复前，依赖附件字段的 case 应谨慎解读。
+
+**教训**：Benchmark case 的 expected answer 必须只依赖模型实际可见的信息。只把文件路径写在 YAML 里不等于模型读到了文件。

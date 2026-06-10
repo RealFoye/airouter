@@ -240,9 +240,11 @@ make test-unit
 |---|------|-----|----------|------|
 | 6.1b | Level 1 样例扩充到 100 条 | 必做 | `data/benchmark_cases/*.json` | — |
 | 6.1c | Level 2 核心实测用例 30 条（高质量，有评分规则和自动评分线索） **部分完成：30条YAML case已就绪** | 必做 | `data/benchmarks/level2/router_quality_cases.yaml` | ✅ 2026-06-08 |
-| 6.3 | Level 2 runner：真实调用 3 模型 + --resume + 失败重试 + 限速 **部分完成：auto-score MVP，LLM-as-Judge 待 Week 3** | 必做 | `runner.py` Level2BenchmarkRunner | ✅ 2026-06-08（47 unit + 8 integration） |
+| 6.3 | Level 2 runner：真实调用 5 模型 + --resume + 失败重试 + 限速 **部分完成：auto-score MVP，LLM-as-Judge 待 Week 3** | 必做 | `runner.py` Level2BenchmarkRunner | ✅ 2026-06-08（47 unit + 8 integration） |
 | 6.4 | Evaluator：auto-score 评分（结构完整性 + 语法正确性 + 关键词匹配） **部分完成：6 类评分函数，LLM-as-Judge 待 Week 3** | 必做 | `src/airouter/engine/benchmark/evaluator.py` | ✅ 2026-06-08 |
-| 6.5 | Level 3 策略回测：全程 Tier 1 vs 智能路由（成本/质量对比报告） | 必做 | `src/airouter/engine/benchmark/reporter.py` | 验证对比报告生成 |
+| 6.5 | Level 3 策略回测：全程 Tier 1 vs 智能路由（成本/质量对比报告） | 必做 | `src/airouter/engine/benchmark/reporter.py` | ✅ 2026-06-08（20 reporter + 14 runner unit + 8 integration） |
+| 6.7 | Finance Benchmark：36 cases × 5 models + 规则评分 + 中文报告 | 必做 | `src/airouter/engine/benchmark/finance_*.py` | ✅ 2026-06-09（80 unit + 8 integration） |
+| 6.8 | Finance Judge 辅助审计：MiniMax-M3 独立评分 + --judge-existing CLI + 审计章节 | 可降级 | `src/airouter/engine/benchmark/finance_judge.py` | ✅ 2026-06-10（44 unit + 2 integration） |
 | 6.6 | Context Rot 验证实验：3 模型×3 长度×3 任务=27 次调用 + 退化曲线 | 可降级 | `scripts/context_budget_experiment.py` | 验证退化趋势数据 |
 
 ### Phase 8：Web 平台

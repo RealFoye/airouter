@@ -1,0 +1,9 @@
+dept,category,budget_cny,actual_cny,owner_note
+Sales,Travel,80000.0,98000.0,more customer visits
+Sales,Entertainment,35000.0,52000.0,new distributor campaign
+R&D,Cloud,120000.0,168000.0,model experiments
+R&D,Training,20000.0,12000.0,vendor discount
+Finance,Software,30000.0,34000.0,extra seats
+HR,Recruitment,15000.0,26000.0,campus fair
+Operations,Logistics,90000.0,87000.0,stable
+IT,Hardware,50000.0,64500.0,laptop refresh
