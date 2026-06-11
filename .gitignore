@@ -41,3 +41,6 @@ Thumbs.db
 
 # Benchmark runtime artifacts
 runs/
+
+# OpenSquilla (not committed — obtained separately)
+/opensquilla/

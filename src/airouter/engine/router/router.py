@@ -13,6 +13,8 @@ from __future__ import annotations
 import hashlib
 
 from airouter.config import load_all
+from airouter.engine.complexity.analyzer import ComplexityAnalyzer
+from airouter.engine.complexity.types import ComplexityAnalysis
 from airouter.engine.router.analyzer import TaskAnalyzer
 from airouter.engine.router.classifier import StrategyClassifier
 from airouter.engine.router.estimator import CostEstimator
@@ -22,6 +24,7 @@ from airouter.models.enums import BudgetStatus, StrategyType
 from airouter.models.model_registry import ModelRegistry
 from airouter.models.schemas import (
     AlternativeStrategy,
+    ComplexityDiagnostics,
     FallbackPolicy,
     ModelAssignment,
     RoutingDecision,
@@ -33,22 +36,26 @@ class Router:
     """路由引擎入口：任务描述 → 路由决策。"""
 
     def __init__(self):
-        self.analyzer = TaskAnalyzer()
+        config = load_all()  # ComplexityConfig 在此一并加载
+        self.rule_analyzer = TaskAnalyzer()
+        self.analyzer = ComplexityAnalyzer(config.complexity, rule_analyzer=self.rule_analyzer)
         self.selector = ModelSelector()
         self.estimator = CostEstimator()
-        config = load_all()
         self.registry = ModelRegistry(config.models)
         self.gate = RoutingGate()
         self.classifier = StrategyClassifier(
             human_review_required_tasks=self.selector._routing_rules.human_review_required_tasks,
         )
         self._routing_rules = self.selector._routing_rules
-        self._config_version = "v1.0"
+        self._config_version = "v1.1-ml-complexity"
 
     def route(self, task_description: str) -> RoutingDecision:
         """完整路由流程：分析 → 分类 → 过滤 → 策略评分 → 门禁 → 输出决策。"""
-        # 第1层：任务画像
-        features = self.analyzer.extract_features(task_description)
+        # 第1层：任务画像（含复杂度诊断）
+        eval_result = self.analyzer.analyze(task_description)
+        features = eval_result.features
+        complexity_analysis = eval_result.analysis
+        diagnostics = self._to_diagnostics(complexity_analysis)
 
         # 策略分类
         classification = self.classifier.classify(features)
@@ -64,7 +71,7 @@ class Router:
         )
 
         if not strategy_scores:
-            return self._escalate_to_human(features, "无候选策略满足条件")
+            return self._escalate_to_human(features, "无候选策略满足条件", complexity_analysis=diagnostics)
 
         best = strategy_scores[0]
 
@@ -120,9 +127,15 @@ class Router:
             quality_gate=quality_gate,
             fallback_policy=fallback,
             config_version=self._config_version,
+            complexity_analysis=diagnostics,
         )
 
-    def _escalate_to_human(self, features: TaskFeatures, reason: str) -> RoutingDecision:
+    def _escalate_to_human(
+        self,
+        features: TaskFeatures,
+        reason: str,
+        complexity_analysis: ComplexityDiagnostics | None = None,
+    ) -> RoutingDecision:
         """条件5：无候选策略满足条件，兜底到人工。"""
         return RoutingDecision(
             task_hash="escalate",
@@ -143,6 +156,7 @@ class Router:
             quality_gate=["human_review"],
             fallback_policy=[FallbackPolicy(trigger="NO_CANDIDATE", action="escalate_to_human")],
             config_version=self._config_version,
+            complexity_analysis=complexity_analysis,
         )
 
     def _calculate_baseline(self, features: TaskFeatures) -> float:
@@ -222,3 +236,34 @@ class Router:
             if m.name == executor_name:
                 return m.tier
         return 1
+
+    @staticmethod
+    def _to_diagnostics(analysis: ComplexityAnalysis) -> ComplexityDiagnostics:
+        """将 ComplexityAnalysis dataclass 转换为 ComplexityDiagnostics Pydantic。"""
+        ml = analysis.ml_prediction
+        meta = analysis.backend_metadata
+        return ComplexityDiagnostics(
+            rule_complexity=analysis.rule_complexity.value,
+            rule_category=analysis.rule_category.value,
+            rule_risk=analysis.rule_risk.value,
+            ml_raw_class=ml.raw_route_class if ml else None,
+            ml_raw_confidence=ml.raw_confidence if ml else None,
+            ml_final_class=ml.final_route_class if ml else None,
+            ml_final_class_probability=ml.final_class_probability if ml else None,
+            ml_probabilities=ml.probabilities if ml else None,
+            ml_flags=ml.flags if ml else None,
+            ml_margin=ml.margin if ml else None,
+            ml_difficulty_score=ml.difficulty_score if ml else None,
+            resolved=analysis.resolved.value,
+            resolution_reason=analysis.resolution_reason,
+            mode=analysis.mode,
+            ml_available=analysis.ml_available,
+            fallback_reason=meta.fallback_reason,
+            ml_cold_start_ms=ml.cold_start_ms if ml else None,
+            ml_latency_ms=ml.latency_ms if ml else None,
+            ml_verification_ms=meta.verification_ms,
+            ml_load_ms=meta.load_ms,
+            ml_model_version=ml.model_version if ml else None,
+            manifest_hash=meta.manifest_hash,
+            config_version=meta.config_version,
+        )

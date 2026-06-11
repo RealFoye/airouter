@@ -1,0 +1,17 @@
+# 复杂度分析配置：规则 + 可选 ML 增强
+mode: rules  # rules | shadow | opensquilla | hybrid
+# - rules:      不加载 ML，纯规则
+# - shadow:     运行 ML 但不改变路由（日志记录）
+# - opensquilla: 仅离线实验用，不建议生产
+# - hybrid:     保守融合（只升不降，使用 raw class）
+
+bundle_dir: ""           # 覆盖路径，env: AIROUTER_OPENSQUILLA_BUNDLE_DIR
+require_runtime: false   # false = ML 不可用时优雅降级
+use_aux_head: false      # 传给 InferenceCore.from_model_dir()
+
+# Hybrid 策略（仅 mode=hybrid 时生效）
+hybrid:
+  allow_upgrade: true
+  allow_downgrade: false
+  max_upgrade_steps: 1
+  confidence_threshold: 0.50  # raw_confidence 低于此值时不升级

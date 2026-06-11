@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 
+from airouter.engine.router.rule_logic import infer_complexity as _rule_infer_complexity
 from airouter.models.enums import (
     ComplexityLevel,
     ContextLevel,
@@ -70,25 +71,7 @@ KEYWORD_RULES: dict[TaskCategory, list[tuple[str, float]]] = {
 }
 
 
-# ── 复杂度推断规则 ──────────────────────────────────────────
-COMPLEXITY_KEYWORDS: dict[ComplexityLevel, list[str]] = {
-    ComplexityLevel.EXPERT: [
-        "系统级", "全局", "跨域", "多租户", "百万级", "千万级",
-        "核心算法", "新算法", "领域专家", "百万并发",
-    ],
-    ComplexityLevel.COMPLEX: [
-        "跨模块", "多文件", "中间件", "网关", "分布式",
-        "高并发", "鉴权", "OAuth", "MFA", "权限管理",
-        "安全模块", "并发", "死锁", "内存泄漏",
-        "God Class", "策略模式", "Repository",
-    ],
-    ComplexityLevel.MODERATE: [
-        "多个", "几个", "相关", "一些", "部分", "模块",
-        "多个文件", "相关模块", "安全漏洞", "数据清洗",
-        "Docker Compose", "数据库", "登录", "整个项目",
-    ],
-    # SIMPLE 是默认，不需要关键词
-}
+# ── 复杂度推断规则（已抽取到 rule_logic.py） ─────────────────
 
 
 # ── 风险等级推断规则 ────────────────────────────────────────
@@ -197,11 +180,7 @@ class TaskAnalyzer:
         return max(scores, key=lambda k: scores[k])
 
     def _infer_complexity(self, desc: str, desc_lower: str) -> ComplexityLevel:
-        for level in [ComplexityLevel.EXPERT, ComplexityLevel.COMPLEX, ComplexityLevel.MODERATE]:
-            for kw in COMPLEXITY_KEYWORDS.get(level, []):
-                if kw.lower() in desc_lower or kw in desc:
-                    return level
-        return ComplexityLevel.SIMPLE
+        return _rule_infer_complexity(desc, desc_lower)
 
     def _infer_risk_level(self, desc: str, desc_lower: str) -> RiskLevel:
         for kw in HIGH_RISK_KEYWORDS:
@@ -300,3 +279,84 @@ class TaskAnalyzer:
         parts = re.split(r'(?:以及|并且|而且|和|及|\+|，|,)', desc)
         parts = [p.strip() for p in parts if len(p.strip()) > 4]
         return parts[:6]  # 最多 6 个子任务
+
+    # ── 复杂度覆盖时的资源重算 ──────────────────────────────
+    _CONTEXT_BY_COMPLEXITY: dict[ComplexityLevel, ContextLevel] = {
+        ComplexityLevel.SIMPLE: ContextLevel.MINIMAL,
+        ComplexityLevel.MODERATE: ContextLevel.STANDARD,
+        ComplexityLevel.COMPLEX: ContextLevel.HEAVY,
+        ComplexityLevel.EXPERT: ContextLevel.HEAVY,
+    }
+
+    _REASONING_BY_COMPLEXITY: dict[ComplexityLevel, ReasoningLevel] = {
+        ComplexityLevel.SIMPLE: ReasoningLevel.LOW,
+        ComplexityLevel.MODERATE: ReasoningLevel.MEDIUM,
+        ComplexityLevel.COMPLEX: ReasoningLevel.HIGH,
+        ComplexityLevel.EXPERT: ReasoningLevel.VERY_HIGH,
+    }
+
+    _CONTEXT_ORDER = {
+        ContextLevel.MINIMAL: 0,
+        ContextLevel.STANDARD: 1,
+        ContextLevel.HEAVY: 2,
+        ContextLevel.EXTREME: 3,
+    }
+
+    _REASONING_ORDER = {
+        ReasoningLevel.LOW: 0,
+        ReasoningLevel.MEDIUM: 1,
+        ReasoningLevel.HIGH: 2,
+        ReasoningLevel.VERY_HIGH: 3,
+    }
+
+    def rebuild_complexity_dependent_features(
+        self,
+        description: str,
+        features: TaskFeatures,
+        resolved_complexity: ComplexityLevel,
+        *,
+        monotonic: bool = True,
+    ) -> TaskFeatures:
+        """按新复杂度重算 7 个依赖字段。
+
+        monotonic=True（hybrid 默认）：只升不降，取高原则，能力 union 合并。
+        monotonic=False（opensquilla 模式）：按 resolved complexity 完整替换所有 7 个字段。
+        """
+        new_ctx = self._CONTEXT_BY_COMPLEXITY.get(resolved_complexity, ContextLevel.STANDARD)
+        new_input = self._estimate_input_tokens(new_ctx)
+        new_output = self._estimate_output_tokens(resolved_complexity)
+        new_reasoning = self._REASONING_BY_COMPLEXITY.get(resolved_complexity, ReasoningLevel.MEDIUM)
+        new_subtasks = self._extract_subtasks(description, resolved_complexity)
+
+        cap_key = (features.category, resolved_complexity)
+        new_required, new_preferred = CAPABILITY_REQUIREMENTS.get(cap_key, (set(), set()))
+
+        if monotonic:
+            # 取高原则
+            ctx = new_ctx if self._CONTEXT_ORDER[new_ctx] > self._CONTEXT_ORDER[features.context_requirement] else features.context_requirement
+            input_tokens = max(features.estimated_input_tokens, new_input)
+            output_tokens = max(features.estimated_output_tokens, new_output)
+            reasoning = new_reasoning if self._REASONING_ORDER[new_reasoning] > self._REASONING_ORDER[features.reasoning_intensity] else features.reasoning_intensity
+            subtasks = new_subtasks if new_subtasks else features.subtasks
+            required_caps = features.required_capabilities | new_required
+            preferred_caps = features.preferred_capabilities | new_preferred
+        else:
+            # 完整替换
+            ctx = new_ctx
+            input_tokens = new_input
+            output_tokens = new_output
+            reasoning = new_reasoning
+            subtasks = new_subtasks
+            required_caps = new_required
+            preferred_caps = new_preferred
+
+        return features.model_copy(update={
+            "complexity": resolved_complexity,
+            "context_requirement": ctx,
+            "estimated_input_tokens": input_tokens,
+            "estimated_output_tokens": output_tokens,
+            "reasoning_intensity": reasoning,
+            "subtasks": subtasks,
+            "required_capabilities": required_caps,
+            "preferred_capabilities": preferred_caps,
+        })

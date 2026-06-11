@@ -18,6 +18,7 @@ console = Console()
 def analyze(
     task: str = typer.Argument(..., help="任务描述"),
     output_format: str = typer.Option("rich", "--format", "-f", help="输出格式: rich/json"),
+    show_complexity: bool = typer.Option(False, "--show-complexity", help="显示复杂度分析详情"),
 ):
     """分析任务并推荐最优模型。"""
     router = Router()
@@ -27,6 +28,8 @@ def analyze(
         _output_json(decision)
     else:
         _output_rich(decision)
+        if show_complexity:
+            _output_complexity(decision)
 
 
 def _output_rich(decision):
@@ -130,4 +133,56 @@ def _output_rich(decision):
 def _output_json(decision):
     """JSON 格式输出。"""
     data = decision.model_dump(mode="json")
-    console.print(json.dumps(data, indent=2, ensure_ascii=False))
+    print(json.dumps(data, indent=2, ensure_ascii=False))
+
+
+def _output_complexity(decision):
+    """显示复杂度分析详情。"""
+    diag = decision.complexity_analysis
+    if diag is None:
+        console.print("[dim]无复杂度分析数据[/dim]")
+        return
+
+    text = Text()
+    text.append("模式: ", style="bold")
+    text.append(f"{diag.mode}\n")
+    text.append("规则复杂度: ", style="bold")
+    text.append(f"{diag.rule_complexity}\n")
+    text.append("最终复杂度: ", style="bold")
+    text.append(f"{diag.resolved}\n")
+    text.append("解析原因: ", style="bold")
+    text.append(f"{diag.resolution_reason}\n")
+
+    if diag.ml_available:
+        text.append("\nML 可用: ", style="bold green")
+        text.append("是\n")
+        if diag.ml_raw_class:
+            text.append("ML raw class: ", style="bold")
+            text.append(f"{diag.ml_raw_class}")
+            if diag.ml_raw_confidence is not None:
+                text.append(f" (conf={diag.ml_raw_confidence:.2f})")
+            text.append("\n")
+        if diag.ml_final_class:
+            text.append("ML final class: ", style="bold")
+            text.append(f"{diag.ml_final_class}")
+            if diag.ml_final_class_probability is not None:
+                text.append(f" (prob={diag.ml_final_class_probability:.2f})")
+            text.append("\n")
+        if diag.ml_probabilities:
+            probs = ", ".join(f"{k}={v:.2f}" for k, v in sorted(diag.ml_probabilities.items()))
+            text.append("概率分布: ", style="bold")
+            text.append(f"{probs}\n")
+        if diag.ml_margin is not None:
+            text.append("Margin: ", style="bold")
+            text.append(f"{diag.ml_margin:.3f}\n")
+        if diag.ml_latency_ms is not None:
+            text.append("推理耗时: ", style="bold")
+            text.append(f"{diag.ml_latency_ms:.1f}ms\n")
+    else:
+        text.append("\nML 可用: ", style="bold yellow")
+        text.append("否\n")
+        if diag.fallback_reason:
+            text.append("Fallback 原因: ", style="bold")
+            text.append(f"{diag.fallback_reason}\n")
+
+    console.print(Panel(text, title="[bold cyan]复杂度分析[/bold cyan]", border_style="cyan"))

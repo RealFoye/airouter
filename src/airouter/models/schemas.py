@@ -194,6 +194,33 @@ CAPABILITY_REQUIREMENTS: dict[tuple[TaskCategory, ComplexityLevel], tuple[set[st
 }
 
 
+# ── ComplexityDiagnostics（ML 复杂度诊断） ─────────────────
+class ComplexityDiagnostics(BaseModel):
+    rule_complexity: str
+    rule_category: str
+    rule_risk: str
+    ml_raw_class: Optional[str] = None
+    ml_raw_confidence: Optional[float] = None
+    ml_final_class: Optional[str] = None
+    ml_final_class_probability: Optional[float] = None
+    ml_probabilities: Optional[dict[str, float]] = None
+    ml_flags: Optional[dict[str, bool]] = None
+    ml_margin: Optional[float] = None
+    ml_difficulty_score: Optional[float] = None
+    resolved: str
+    resolution_reason: str
+    mode: str
+    ml_available: bool
+    fallback_reason: Optional[str] = None
+    ml_cold_start_ms: Optional[float] = None
+    ml_latency_ms: Optional[float] = None
+    ml_verification_ms: Optional[float] = None
+    ml_load_ms: Optional[float] = None
+    ml_model_version: Optional[str] = None
+    manifest_hash: Optional[str] = None
+    config_version: Optional[str] = None
+
+
 # ── RoutingDecision（路由决策输出） ──────────────────────────
 class ModelAssignment(BaseModel):
     planner: Optional[str] = None
@@ -236,6 +263,7 @@ class RoutingDecision(BaseModel):
     fallback_policy: list[FallbackPolicy]
     config_version: str
     created_at: datetime = Field(default_factory=datetime.now)
+    complexity_analysis: Optional[ComplexityDiagnostics] = None
 
 
 # ── ExecutionFeedback（执行反馈） ────────────────────────────

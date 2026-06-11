@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any, Literal, Optional, Union
 
 import yaml
 from pydantic import BaseModel, Field, field_validator
@@ -18,6 +18,7 @@ class AppSettings(BaseSettings):
     data_dir: Path = Field(default=PROJECT_ROOT / "data")
     db_url: str = Field(default="sqlite:///./airouter.db")
     debug: bool = False
+    opensquilla_bundle_dir: str = ""
 
     # 模型 API keys（通过环境变量 AIROUTER_DASHSCOPE_API_KEY 等设置）
     dashscope_api_key: str = ""
@@ -182,6 +183,32 @@ class CompressionPolicyConfig(BaseModel):
     quality_drop_threshold: float = 0.15
 
 
+# ── complexity.yaml ─────────────────────────────────────────
+class HybridConfig(BaseModel):
+    allow_upgrade: bool = True
+    allow_downgrade: bool = False
+    max_upgrade_steps: int = Field(default=1, ge=0, le=3)
+    confidence_threshold: float = Field(default=0.50, ge=0.0, le=1.0)
+
+    @field_validator("allow_downgrade")
+    @classmethod
+    def hybrid_no_downgrade(cls, v: bool) -> bool:
+        if v:
+            raise ValueError(
+                "hybrid mode does not support allow_downgrade=True; "
+                "use mode=opensquilla for full replacement"
+            )
+        return v
+
+
+class ComplexityConfig(BaseModel):
+    mode: Literal["rules", "shadow", "opensquilla", "hybrid"] = "rules"
+    bundle_dir: Optional[Path] = None
+    require_runtime: bool = False
+    use_aux_head: bool = False
+    hybrid: HybridConfig = Field(default_factory=HybridConfig)
+
+
 # ── YAML 加载工具 ───────────────────────────────────────────
 def _load_yaml(path: Path) -> dict:
     if not path.exists():
@@ -218,6 +245,23 @@ def load_compression_policy(data_dir: Path | None = None) -> CompressionPolicyCo
     return CompressionPolicyConfig(**_load_yaml(d / "compression_policy.yaml"))
 
 
+def load_complexity(data_dir: Path | None = None) -> ComplexityConfig:
+    d = data_dir or settings.data_dir
+    path = d / "complexity.yaml"
+    if not path.exists():
+        return ComplexityConfig()
+    data = _load_yaml(path)
+    # 环境变量优先级高于 yaml
+    env_bundle = settings.opensquilla_bundle_dir
+    if env_bundle:
+        data["bundle_dir"] = env_bundle
+    elif data.get("bundle_dir"):
+        data["bundle_dir"] = str(data["bundle_dir"])
+    else:
+        data["bundle_dir"] = None
+    return ComplexityConfig(**data)
+
+
 # ── 聚合配置 ────────────────────────────────────────────────
 class AppConfig(BaseModel):
     """所有配置聚合到一个对象，方便引擎层一次性获取。"""
@@ -226,6 +270,7 @@ class AppConfig(BaseModel):
     budgets: BudgetsConfig
     quality_defaults: QualityDefaultsConfig
     compression_policy: Optional[CompressionPolicyConfig] = None
+    complexity: ComplexityConfig = Field(default_factory=ComplexityConfig)
 
 
 def load_all(data_dir: Path | None = None) -> AppConfig:
@@ -236,4 +281,5 @@ def load_all(data_dir: Path | None = None) -> AppConfig:
         budgets=load_budgets(d),
         quality_defaults=load_quality_defaults(d),
         compression_policy=load_compression_policy(d),
+        complexity=load_complexity(d),
     )
