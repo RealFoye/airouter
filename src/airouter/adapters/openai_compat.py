@@ -108,6 +108,21 @@ class OpenAICompatAdapter(BaseAdapter):
         else:
             usage_dict = None
 
+        # Extract tool_calls for function calling (Agent mode)
+        tool_calls_data = None
+        if hasattr(choice.message, "tool_calls") and choice.message.tool_calls:
+            tool_calls_data = [
+                {
+                    "id": tc.id,
+                    "type": tc.type,
+                    "function": {
+                        "name": tc.function.name,
+                        "arguments": tc.function.arguments,
+                    },
+                }
+                for tc in choice.message.tool_calls
+            ]
+
         return AdapterResponse(
             content=content,
             input_tokens=usage.prompt_tokens if usage else 0,
@@ -115,6 +130,8 @@ class OpenAICompatAdapter(BaseAdapter):
             latency_ms=elapsed_ms,
             model=model,
             raw_usage=usage_dict,
+            tool_calls=tool_calls_data,
+            finish_reason=finish_reason,
         )
 
     def _normalize_kwargs(self, model: str, kwargs: dict[str, Any]) -> dict[str, Any]:

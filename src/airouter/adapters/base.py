@@ -17,6 +17,8 @@ class AdapterResponse:
     latency_ms: int
     model: str
     raw_usage: dict | None = field(default=None)
+    tool_calls: list[dict] | None = field(default=None)
+    finish_reason: str | None = field(default=None)
 
 
 # ── 异常体系 ──────────────────────────────────────────────────

@@ -1185,4 +1185,29 @@ for case_id in sorted(by_case.keys()):
 - 批量客户手机号脱敏 → `HIGH sensitivity`、`MEDIUM risk`、`qwen3.7-plus`、`privacy_check`、无需人工复核。
 - 客户手机号外发供应商 → `HIGH sensitivity`、`HIGH risk`、`qwen3.7-plus`、`privacy_check + human_review`。
 
+---
+
+## 坑 16：OpenSquilla dry-run 输出 sklearn/matplotlib InconsistentVersionWarning
+
+**严重度：P3（功能不受影响，但演示输出不干净）**
+
+**发现时间：Day 2.5 验证**
+
+**现象**：`ai-router run --dry-run` 输出前出现多条 sklearn InconsistentVersionWarning：
+```
+/opt/anaconda3/lib/python3.12/site-packages/sklearn/base.py:380: InconsistentVersionWarning:
+Trying to unpickle estimator TfidfTransformer from version 1.8.0 when using version 1.6.1.
+```
+
+**根因**：OpenSquilla bundle 中的 pickle 模型文件（v4.2_phase3_inference）是在 sklearn 1.8.0 环境下训练的，但当前系统安装的 sklearn 版本是 1.6.1。pickle 反序列化时检测到版本不一致并输出 warning。
+
+**功能影响**：无。模型加载和推理正常，warning 不影响预测结果。
+
+**答辩演示前处理**：
+1. **优先**：用项目 `.venv` 安装匹配版本的 sklearn（>=1.8.0），确保 pickle 版本一致
+2. **备选**：在 CLI 入口添加 `warnings.filterwarnings("ignore", category=UserWarning, module="sklearn")` 静默 sklearn warning
+3. **不推荐**：`export PYTHONWARNINGS=ignore` — 会隐藏所有 warning，包括有价值的
+
+**教训**：ML 模型的 pickle 序列化对依赖版本敏感。跨环境部署时，训练环境和推理环境的 sklearn/numpy/scipy 版本必须一致。答辩演示前务必在演示环境跑一遍 dry-run，确保输出干净。
+
 **教训**：关键词只能作为召回信号，不能独立触发硬门禁。硬门禁要尽量基于确定性事实和业务语境：数据本体、规模、外发/写入/删除等行为、以及是否影响正式业务。
