@@ -12,9 +12,9 @@ from __future__ import annotations
 
 import hashlib
 
-from airouter.config import load_all
+from airouter.config import AppConfig, load_all
 from airouter.engine.complexity.analyzer import ComplexityAnalyzer
-from airouter.engine.complexity.types import ComplexityAnalysis
+from airouter.engine.complexity.types import ComplexityAnalysis, ComplexityContext
 from airouter.engine.router.analyzer import TaskAnalyzer
 from airouter.engine.router.classifier import StrategyClassifier
 from airouter.engine.router.estimator import CostEstimator
@@ -33,32 +33,59 @@ from airouter.models.schemas import (
 
 
 class Router:
-    """路由引擎入口：任务描述 → 路由决策。"""
+    """路由引擎入口：任务描述 → 路由决策。
 
-    def __init__(self):
-        config = load_all()  # ComplexityConfig 在此一并加载
+    所有组件可通过 __init__ 注入（用于 benchmark 策略回放）。
+    """
+
+    def __init__(
+        self,
+        config: AppConfig | None = None,
+        complexity_analyzer: ComplexityAnalyzer | None = None,
+        model_registry: ModelRegistry | None = None,
+        allowed_strategies: list[StrategyType] | None = None,
+    ):
+        config = config or load_all()
         self.rule_analyzer = TaskAnalyzer()
-        self.analyzer = ComplexityAnalyzer(config.complexity, rule_analyzer=self.rule_analyzer)
+        self.analyzer = complexity_analyzer or ComplexityAnalyzer(
+            config.complexity, rule_analyzer=self.rule_analyzer,
+        )
         self.selector = ModelSelector()
         self.estimator = CostEstimator()
-        self.registry = ModelRegistry(config.models)
+        self.registry = model_registry or ModelRegistry(config.models)
         self.gate = RoutingGate()
         self.classifier = StrategyClassifier(
             human_review_required_tasks=self.selector._routing_rules.human_review_required_tasks,
         )
         self._routing_rules = self.selector._routing_rules
         self._config_version = "v1.1-ml-complexity"
+        self._allowed_strategies = allowed_strategies
 
-    def route(self, task_description: str) -> RoutingDecision:
-        """完整路由流程：分析 → 分类 → 过滤 → 策略评分 → 门禁 → 输出决策。"""
+    def route(
+        self,
+        task_description: str,
+        complexity_context: ComplexityContext | None = None,
+    ) -> RoutingDecision:
+        """完整路由流程：分析 → 分类 → 过滤 → 策略评分 → 门禁 → 输出决策。
+
+        complexity_context: 可选的 ML 上下文（多轮历史、工具元数据等），
+                           传递给 ComplexityAnalyzer.analyze()。
+        """
         # 第1层：任务画像（含复杂度诊断）
-        eval_result = self.analyzer.analyze(task_description)
+        eval_result = self.analyzer.analyze(task_description, context=complexity_context)
         features = eval_result.features
         complexity_analysis = eval_result.analysis
         diagnostics = self._to_diagnostics(complexity_analysis)
 
         # 策略分类
         classification = self.classifier.classify(features)
+
+        # 限制策略类型（用于 benchmark 策略回放）
+        if self._allowed_strategies:
+            classification.strategies = [
+                s for s in classification.strategies
+                if s in self._allowed_strategies
+            ]
 
         # 第2-4层：策略级评分
         all_models = self.registry.all_models

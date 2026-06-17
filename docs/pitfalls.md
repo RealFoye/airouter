@@ -631,6 +631,77 @@ console.print(json.dumps(...), soft_wrap=True, crop=False)
 
 **机器可读输出（JSON/XML/CSV）应该用 `print()` 而非 Rich 的 `console.print()`。**
 
+## 坑 13：占位模板数据导致 Benchmark 评测无效
+
+**严重度：P0（评测结果不可信）**
+**发现时间：Week 3 Routing GT review**
+**涉及文件：data/benchmarks/routing_ground_truth/general_cases.yaml**
+
+### 问题现象
+
+Holdout 60 cases 中 52 条使用循环模板：
+- "分析文档N"、"回答问题N"、"function_N" 等占位文本
+- GT-TBL-001 总销售额计算错误（550+650+1200+1000=3400，YAML 中写的是 3650）
+- CODE_DEBUG cases 缺少 test_files，沙箱无法执行
+- 0 个 case 设置 should_ask_clarification=true
+
+### 根因分析
+
+使用模板生成 60 条数据时，只替换了编号（N→1,2,...8），没有替换实际内容。这导致：
+1. 模型可以识别模板模式而非真正理解任务
+2. 错误的真值会将正确模型判为失败
+3. 反幻觉评测维度完全缺失
+
+### 修复方案
+
+1. 完全重写 60 条 cases，每条有独立、真实、可解的内容
+2. 编写 `scripts/validate_holdout_cases.py` 验证脚本（8 项检查）
+3. 编写 `tests/unit/test_holdout_data_quality.py` 数据质量测试（10 个测试）
+4. 冻结 Holdout hash 到 `evaluation_manifest.json`
+
+### 教训
+
+**Benchmark 数据不是越多越好，而是越真实越好。** 生成测试数据时必须：
+1. 每条数据有独立的、可解的 prompt（禁止占位文本循环）
+2. 数值真值必须经过程序验证（算术正确性检查）
+3. 有自动化数据质量守护（验证脚本 + 单元测试），防止退化
+4. 冻结数据 hash 防止静默篡改
+
+## 坑 14：跨语言子串匹配导致硬失败误判
+
+**严重度：P1（评分偏差，大量 false negative）**
+**发现时间：Week 3 Dev 全量 benchmark**
+**涉及文件：src/airouter/engine/benchmark/ground_truth_evaluator.py**
+
+### 问题现象
+
+Dev 全量 30 cases × 5 models = 150 pairs，只有 14/30 cases 有 passing model。16 个 no-passing cases 中，8 个是因为 `missed_critical_risk` 导致所有 5 个模型都归零。
+
+分析发现：`required_findings` 100% 是英文（如 `"SQL injection"`），但模型输出 findings 55% 含中文（如 `"SQL 注入漏洞"`）。子串匹配 `"sql injection" in "sql 注入漏洞"` 返回 False → 判定为"未发现关键风险" → 硬失败。
+
+### 根因分析
+
+`detect_hard_failures()` 中 `missed_critical_risk` 用 `rf.lower() in findings_text.lower()` 做子串匹配。但：
+1. `required_findings` 由 YAML 编写者定义，语言不固定
+2. 中文模型倾向于输出中文 findings
+3. 英文子串在中文文本中几乎不会匹配（除非模型原文引用）
+4. Judge 无法修复硬失败（`final_score=0` 不可逆）
+
+### 修复方案
+
+1. 将 `missed_critical_risk` 和 `dangerous_action_unwarned` 从 `detect_hard_failures()` 移到 `detect_soft_violations()`
+2. 不再归零 `final_score`，改为降低维度分：`risk_identified → 0.0`、`action_correctness → 0.3`
+3. 从 `SAFETY_HARD_FAILURES` 移除（Oracle 一票否决不再适用）
+4. 由 Judge 综合评估 findings 质量（语义理解而非子串匹配）
+
+### 教训
+
+**硬失败只能基于确定性事实，不能基于 NLP 匹配。** 这与坑 #44（fabricated_validation）是同一类问题：
+1. 语言、措辞、格式的差异不应导致零分
+2. 子串匹配在不同语言环境下行为不可预测
+3. 语义理解交给 Judge（LLM），规则引擎只做确定性检查
+4. 硬失败设计原则：`executed=true/false`、`field_A == expected_value` 等布尔/数值事实
+
 - Rich 的自动换行对人可读输出（表格、面板）是特性，对机器可读输出是 bug
 - 如果一个命令有 `--format json` 模式，JSON 分支应该用 `print()` 或 `sys.stdout.write()`
 - 测试时不仅要验证 JSON 能输出，还要验证 `json.loads()` 能解析
@@ -934,3 +1005,184 @@ Benchmark YAML 中的 `artifacts` 是本地文件路径，不会自动传给大�
 Finance Runner 的 `_build_messages()` 新增 artifact 注入：对 case.artifacts 中的 CSV/Markdown/政策文件读取文本内容，附加到用户消息中。旧 run 使用 raw outputs 离线重评分时需在报告中标注：这些输出生成于 artifact 注入修复前，依赖附件字段的 case 应谨慎解读。
 
 **教训**：Benchmark case 的 expected answer 必须只依赖模型实际可见的信息。只把文件路径写在 YAML 里不等于模型读到了文件。
+
+### 38. 循环中创建闭包必须用默认参数捕获循环变量
+
+策略回放中 for 循环创建多个 feature resolver 闭包时，如果直接引用循环变量，所有闭包会共享最后一个值。
+
+**现象**：
+```python
+for route_field, strategy_name in [("raw_route_class", "ml_raw"), ("final_route_class", "ml_final")]:
+    def resolver(case):
+        return getattr(pred, route_field)  # BUG: 所有 resolver 都用 "final_route_class"
+```
+
+**根因**：Python 闭包是 late binding——在调用时才查找变量值。循环结束后，`route_field` 的值是最后一个迭代的 `"final_route_class"`。
+
+**修复**：使用默认参数捕获当前迭代的值（default args are evaluated at function definition time）：
+```python
+for route_field, strategy_name in [("raw_route_class", "ml_raw"), ("final_route_class", "ml_final")]:
+    def make_resolver(_field=route_field):
+        def resolver(case):
+            return getattr(pred, _field)  # OK: _field 在 make_resolver 调用时绑定
+        return resolver
+    ...
+```
+
+**教训**：循环 + 闭包 + 引用循环变量 = 经典的 Python 陷阱。要么用默认参数捕获，要么用工厂函数（`make_resolver`）隔离作用域。工厂函数更清晰，尤其是闭包逻辑复杂时。
+
+### 39. --limit N 语义必须明确"是否包含 resume 历史"
+
+**现象**：用户执行 `--limit 5 --resume` 时，不清楚"5"是指"总共 5 个 pair"还是"本次新增 5 个 pair"。
+
+**根因**：`--limit` 语义模糊，没有明确是否包含 resume 历史。
+
+**修复**：明确语义为"本次最多执行 N 个新 pair，resume 历史不计入 N。实际 = min(N, remaining)"。代码中先计算 `pending_pairs`（排除 completed），再切片 `work_items = pending_pairs[:actual_limit]`。
+
+**教训**：CLI flag 的语义必须精确，尤其是与 resume/continue 组合时。文档和代码都要明确"limit 是否包含历史"。
+
+### 40. Judge prompt 不得泄漏 ground truth / expected_values
+
+**现象**：Judge 评分偏高，因为 prompt 中包含了 `expected_values`、`required_findings` 等评分标准。
+
+**根因**：Judge prompt 构建时没有隔离"被测模型可见的信息"和"评分器私有信息"。
+
+**修复**：
+1. `build_judge_prompt()` 只使用 `case.prompt` + `case.input_context` + `raw_output`
+2. `_verify_no_ground_truth_leak()` 检查 prompt 中不含 `expected_values`、`ground_truth`、`oracle` 等关键词
+3. 断言验证：`assert _verify_no_ground_truth_leak(messages), "Judge prompt leaks ground truth!"`
+
+**教训**：LLM-as-Judge 的可信度依赖于"盲审"——Judge 不能看到答案。构建 prompt 时必须严格隔离评分标准和被测输出。
+
+### 41. Oracle/Replay 逻辑必须单一入口，禁止多路径复制
+
+**现象**：`run()`、`run_with_reruns()`、Judge 重建三处各自复制 ~100 行 Oracle/Replay 代码。修改一处（如 Dev/Holdout 分离）时，其他两处遗漏。
+
+**根因**：没有统一的分析函数，每个路径独立实现完整 case 过滤 + Oracle 生成 + 策略回放。
+
+**修复**：
+1. 抽取 `rebuild_analysis()` 方法 + `AnalysisArtifacts` dataclass
+2. 三路径全部调用 `rebuild_analysis()`，禁止内联 Oracle/Replay 逻辑
+3. `require_judge=True` 参数控制 Judge 阶段的完整 case 判定
+
+**教训**：当多个代码路径做同一件事时，必须抽取到单一函数。否则修复一个 bug 需要在多处做同样的修改，极易遗漏。
+
+### 42. generate_oracles() 必须接收过滤后的 aggregated，不能接收全量
+
+**现象**：`limit=7` 时 `complete_cases=1`，但 `oracle_count=2`。不完整 case（只有 3/5 模型 success）也进入了 Oracle。
+
+**根因**：`generate_oracles(complete_cases, aggregated, dataset)` 中 `aggregated` 是全量聚合结果，包含了不完整 case 的数据。Oracle 生成器按 case_id 查找 aggregated 数据时，会找到不完整 case 的部分数据。
+
+**修复**：
+```python
+complete_aggregated = [a for a in aggregated if a.case_id in complete_case_ids]
+oracles = generate_oracles(complete_cases, complete_aggregated, dataset)
+```
+
+**教训**：当"完整 case"和"全量数据"是两个不同概念时，传入生成函数的数据必须与过滤条件一致。
+
+### 43. 物理 API 调用数 ≠ 逻辑 pair 数
+
+**现象**：`total_physical_api_calls` 用 `len(new_results)` 近似，忽略了重试导致的额外调用。
+
+**根因**：`ModelExecutor._call_with_retry` 的重试在内部完成，外部只看到最终结果，无法感知中间重试次数。
+
+**修复**：
+1. `ModelExecutor` 新增线程安全计数器 `_physical_call_count`，每次 `adapter.chat()` 调用递增
+2. 每个阶段（initial/rerun/judge）使用 before/after snapshot 计算 delta
+3. `total_physical_api_calls` = 所有阶段 delta 之和
+4. `retry_attempts` = physical - logical
+
+**教训**：当系统有重试机制时，"逻辑操作数"和"物理调用数"是两个不同的度量。需要底层计数器来精确追踪。
+
+### 44. NLP 关键词匹配不能承担硬失败判定
+
+**现象**：Smoke test 中 3/5 模型被 `fabricated_validation` 误判归零。模型输出"修改后将通过测试"、"预期测试通过"等预测性语言，被 `execution_claim_patterns` 关键词匹配为"伪造执行"。
+
+**根因**：`detect_hard_failures()` 用 19 个 `execution_claim_patterns` + 10 个 `predictive_patterns` 做 NLP 匹配。关键词穷举有两个固有缺陷：
+1. False positive：预测/否定上下文（"不应执行 DELETE"、"应该通过测试"）被匹配为执行声明
+2. False negative：模型换一种说法就绕过
+
+**修复**：三层判定设计，只有确定性事实才触发硬失败：
+1. **Layer 1 硬失败**：`validation.executed == true` → 被测模型无执行工具，必然是伪造
+2. **Layer 2 软扣分**：`results` 非空 + `executed=false` → 字段契约违规，降 `structured_compliance`
+3. **Layer 3 审计**：NLP 疑似矛盾 → `possible_fabricated_validation`，交 Judge 审计
+
+同时从根因修复：system prompt 明确告知模型无执行工具、`results` 必须为空、预测写入 `expected_outcome` 字段。
+
+**教训**：硬失败（final_score 归零）必须基于确定性事实（布尔字段、数值比较），不能基于 NLP 关键词匹配。关键词匹配只能用于软告警或辅助审计。
+
+---
+
+## 坑 16：generate_oracles 未过滤 cases 参数导致 Dev/Holdout 重复
+
+**严重度：P2**
+
+**现象**：`rebuild_analysis(dataset="all")` 生成的 oracles.jsonl 有 180 条，每个 case 同时有 dev 和 holdout 两条记录。
+
+**根因**：`generate_oracles()` 函数遍历 `aggregated` 中的全部 case_id（通过 `by_case.keys()`），而没有检查传入的 `cases` 参数。当 `dataset="all"` 时，`rebuild_analysis` 分别调用 `generate_oracles(dev_complete, ...)` 和 `generate_oracles(holdout_complete, ...)`，但两次调用都生成了全部 90 个 oracle，导致重复。
+
+**修复**：在 `generate_oracles()` 开头从 `cases` 参数构建 `case_id_set`，遍历时只处理属于当前 dataset 的 case_id：
+
+```python
+case_id_set = {c.id for c in cases}
+for case_id in sorted(by_case.keys()):
+    if case_id not in case_id_set:
+        continue
+    ...
+```
+
+**教训**：当函数接受一个列表参数但内部使用另一个数据源时，务必用参数过滤数据源，避免隐式的全量处理。
+
+---
+
+## 坑 15：Judge 真值泄漏检测的 false positive（raw_output 含合法术语）
+
+**严重度：P2**
+
+**现象**：ENG-SQL-005 的 2 个 Judge pair 失败，错误信息 `Judge prompt leaks ground truth!`。
+
+**根因**：`_verify_no_ground_truth_leak()` 检查 Judge prompt 的全部消息内容，包括模型原始输出 (raw_output)。模型在 SQL 任务中自然使用了 "oracle" 一词（Oracle 数据库术语），触发了 forbidden keyword 匹配。raw_output 是待评估内容，不可能泄漏评分标准。
+
+**修复**：
+1. 泄漏检测只检查 system prompt 和 user message 中 `## 模型输出` 标记之前的部分
+2. 从 forbidden_keywords 中移除 `"oracle"`（Oracle 数据库是合法术语）
+
+**教训**：安全校验的范围必须精确。检查"输入是否包含敏感信息"时，不应把"待评估的输出"也纳入检查范围，因为输出中自然可能包含这些词汇。类似场景：检查 SQL 注入时不应检查用户合法输入的 SQL 关键词。
+
+---
+
+## 坑 14：敏感字段关键词不能直接触发硬门禁
+
+**严重度：P1**
+
+**现象**：用户输入“帮我写一个 Python 函数，把用户输入的手机号格式化成 +86 138-1234-5678 的标准格式，非法输入返回 None。”  
+高级路由分析把任务判为 `SIMPLE / LOW risk`，但最终无候选模型并要求人工复核。
+
+**根因**：
+1. `_infer_sensitivity()` 命中“手机号”关键词，直接判为 `sensitivity=HIGH`。
+2. Tier 3 模型 `deepseek-v4-flash.allow_sensitive_data=false`，被敏感数据硬约束过滤。
+3. SIMPLE 默认只允许 Tier 3，Tier 2/1 不进入候选。
+4. 候选集为空，Router 兜底到人工复核。
+
+**为什么这是误判**：
+“手机号格式化函数”只是代码示例和字段语义，不等于处理真实客户手机号。  
+真正需要升级的是“批量真实手机号”“客户数据外发”“生产数据写入/删除”等场景。
+
+**修复**：
+1. 敏感性判断改为多信号：
+   - 关键词弱信号
+   - 手机号/邮箱/身份证/API key 等数据本体正则
+   - 批量/附件/CSV/生产数据等规模和来源信号
+   - 外发/同步/写入/删除/生产等业务影响信号
+   - 函数/校验/格式化/mock/test 等示例语境降级信号
+2. `sensitivity=MEDIUM/HIGH` 追加 `privacy_check`。
+3. 只有 `sensitivity=HIGH && risk_level=HIGH` 才自动人工复核。
+4. SIMPLE 高敏任务允许 Tier 2 兜底，避免 Tier 3 被过滤后无候选。
+
+**验证样例**：
+- 手机号格式化函数 → `LOW sensitivity`、`LOW risk`、`deepseek-v4-flash`、无需人工复核。
+- 批量客户手机号脱敏 → `HIGH sensitivity`、`MEDIUM risk`、`qwen3.7-plus`、`privacy_check`、无需人工复核。
+- 客户手机号外发供应商 → `HIGH sensitivity`、`HIGH risk`、`qwen3.7-plus`、`privacy_check + human_review`。
+
+**教训**：关键词只能作为召回信号，不能独立触发硬门禁。硬门禁要尽量基于确定性事实和业务语境：数据本体、规模、外发/写入/删除等行为、以及是否影响正式业务。

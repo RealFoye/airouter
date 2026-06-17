@@ -5,20 +5,6 @@
 models:
   # ── Tier 1（重型）：规划、架构、复杂推理 ──
 
-  # LLM Judge（不参与常规路由，专用于评测）
-  - name: "claude-sonnet-4-6"
-    tier: 1
-    provider: "anthropic"
-    api_base: "https://token.cvte.com/v1"
-    input_price_per_1k: 0.0216    # CNY 21.6 / 1M (USD 3.0 / 1M * 7.2)
-    output_price_per_1k: 0.108    # CNY 108 / 1M (USD 15.0 / 1M * 7.2)
-    max_context_window: 200000
-    capabilities:
-      - judge
-      - complex_reasoning
-    allow_sensitive_data: true
-    latency_estimate_ms: 5000
-
   - name: "qwen3.7-max"
     tier: 1
     provider: "dashscope"
@@ -111,6 +97,9 @@ models:
       - test_generation
       - data_processing
       - formatting
+      # Web image_model path: company multimodal tasks are routed here.
+      - multimodal
+      - vision
     allow_sensitive_data: true
     latency_estimate_ms: 2000
     cache:
@@ -129,6 +118,7 @@ models:
     output_price_per_1k: 0.00864  # Temporary estimate, pending CCH usage CSV calibration
     max_context_window: 200000
     capabilities:
+      - judge
       - complex_reasoning
       - documentation
       - data_processing

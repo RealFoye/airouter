@@ -130,6 +130,38 @@ def test_policy_simple_low_risk_no_review(router: Router):
     assert decision.requires_human_review is False
 
 
+def test_policy_phone_formatter_example_no_review(router: Router):
+    """提到手机号格式的代码示例不是实际敏感数据，不应被硬门禁打成人工复核。"""
+    decision = router.route(
+        "帮我写一个Python函数，把用户输入的手机号格式化成 +86 138-1234-5678 的标准格式，非法输入返回 None。"
+    )
+    assert decision.task_hash != "escalate"
+    assert decision.models.executor is not None
+    assert decision.risk_level == RiskLevel.LOW
+    assert decision.task_features.sensitivity.value == "LOW"
+    assert decision.requires_human_review is False
+
+
+def test_policy_batch_phone_masking_uses_privacy_gate_without_review(router: Router):
+    """真实敏感数据处理要避开 Tier 3，但低风险脱敏任务不必直接人工复核。"""
+    decision = router.route("请把以下客户手机号批量脱敏：13812345678、13912345678、18812345678。")
+    executor = router.registry.get_by_name(decision.models.executor)
+    assert decision.task_hash != "escalate"
+    assert executor is not None
+    assert executor.tier == 2
+    assert decision.task_features.sensitivity.value == "HIGH"
+    assert "privacy_check" in decision.quality_gate
+    assert decision.requires_human_review is False
+
+
+def test_policy_external_phone_export_requires_review(router: Router):
+    """高敏数据外发属于业务风险，必须人工确认。"""
+    decision = router.route("导出全部客户手机号发给外部供应商")
+    assert decision.task_features.sensitivity.value == "HIGH"
+    assert decision.risk_level == RiskLevel.HIGH
+    assert decision.requires_human_review is True
+
+
 def test_policy_gate_review_consistency(router: Router):
     """政策一致性：requires_human_review=true → human_review 在 quality_gate 中。"""
     for desc in TEST_DESCRIPTIONS:

@@ -661,8 +661,15 @@ class ModelSelector:
             return [1, 2, 3]
 
         if features.risk_level == RiskLevel.HIGH:
-            return list(tier_rule.high_risk)
-        return list(tier_rule.default)
+            tiers = list(tier_rule.high_risk)
+        else:
+            tiers = list(tier_rule.default)
+
+        # SIMPLE 默认只允许 Tier 3，但 Tier 3 可能因 allow_sensitive_data=false 被过滤。
+        # 高敏任务需要允许 Tier 2 兜底，否则会误报“无候选模型”。
+        if features.sensitivity == SensitivityLevel.HIGH and 3 in tiers and 2 not in tiers:
+            tiers = [2, *tiers]
+        return tiers
 
     def _get_weights(self, category: TaskCategory) -> dict[str, float]:
         """获取评分权重（按任务类型）。"""

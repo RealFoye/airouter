@@ -1,0 +1,165 @@
+{
+  "rules": {
+    "total": 70,
+    "accuracy": 0.6857,
+    "accuracy_pct": "68.6%",
+    "under_routing": 20,
+    "under_routing_pct": "28.6%",
+    "severe_under_routing": 3,
+    "severe_under_routing_pct": "4.3%",
+    "over_routing": 2,
+    "over_routing_pct": "2.9%",
+    "high_risk_under_routing": 9,
+    "high_risk_total": 32,
+    "high_risk_under_pct": "28.1%",
+    "tier1_rate": "5.7%",
+    "tier1_count": 4,
+    "estimated_cost_cny": 1.3325,
+    "cost_source": "models.yaml",
+    "confusion_matrix": {
+      "SIMPLE": {
+        "SIMPLE": 21,
+        "COMPLEX": 1
+      },
+      "MODERATE": {
+        "MODERATE": 11,
+        "SIMPLE": 16,
+        "COMPLEX": 1
+      },
+      "EXPERT": {
+        "EXPERT": 4
+      },
+      "COMPLEX": {
+        "COMPLEX": 12,
+        "SIMPLE": 3,
+        "MODERATE": 1
+      }
+    }
+  },
+  "ml_raw": {
+    "total": 70,
+    "accuracy": 0.4571,
+    "accuracy_pct": "45.7%",
+    "under_routing": 15,
+    "under_routing_pct": "21.4%",
+    "severe_under_routing": 2,
+    "severe_under_routing_pct": "2.9%",
+    "over_routing": 23,
+    "over_routing_pct": "32.9%",
+    "high_risk_under_routing": 5,
+    "high_risk_total": 32,
+    "high_risk_under_pct": "15.6%",
+    "tier1_rate": "30.0%",
+    "tier1_count": 21,
+    "estimated_cost_cny": 2.5803,
+    "cost_source": "models.yaml",
+    "confusion_matrix": {
+      "SIMPLE": {
+        "SIMPLE": 19,
+        "MODERATE": 1,
+        "EXPERT": 1,
+        "COMPLEX": 1
+      },
+      "MODERATE": {
+        "MODERATE": 6,
+        "SIMPLE": 12,
+        "EXPERT": 6,
+        "COMPLEX": 4
+      },
+      "EXPERT": {
+        "EXPERT": 4
+      },
+      "COMPLEX": {
+        "COMPLEX": 3,
+        "EXPERT": 10,
+        "MODERATE": 1,
+        "SIMPLE": 2
+      }
+    }
+  },
+  "ml_final": {
+    "total": 70,
+    "accuracy": 0.4571,
+    "accuracy_pct": "45.7%",
+    "under_routing": 7,
+    "under_routing_pct": "10.0%",
+    "severe_under_routing": 1,
+    "severe_under_routing_pct": "1.4%",
+    "over_routing": 31,
+    "over_routing_pct": "44.3%",
+    "high_risk_under_routing": 1,
+    "high_risk_total": 32,
+    "high_risk_under_pct": "3.1%",
+    "tier1_rate": "32.9%",
+    "tier1_count": 23,
+    "estimated_cost_cny": 2.9721,
+    "cost_source": "models.yaml",
+    "confusion_matrix": {
+      "SIMPLE": {
+        "SIMPLE": 16,
+        "MODERATE": 1,
+        "COMPLEX": 4,
+        "EXPERT": 1
+      },
+      "MODERATE": {
+        "MODERATE": 8,
+        "SIMPLE": 6,
+        "COMPLEX": 7,
+        "EXPERT": 7
+      },
+      "EXPERT": {
+        "EXPERT": 4
+      },
+      "COMPLEX": {
+        "COMPLEX": 4,
+        "EXPERT": 11,
+        "SIMPLE": 1
+      }
+    }
+  },
+  "hybrid": {
+    "total": 70,
+    "accuracy": 0.6429,
+    "accuracy_pct": "64.3%",
+    "under_routing": 12,
+    "under_routing_pct": "17.1%",
+    "severe_under_routing": 2,
+    "severe_under_routing_pct": "2.9%",
+    "over_routing": 13,
+    "over_routing_pct": "18.6%",
+    "high_risk_under_routing": 7,
+    "high_risk_total": 32,
+    "high_risk_under_pct": "21.9%",
+    "tier1_rate": "15.7%",
+    "tier1_count": 11,
+    "estimated_cost_cny": 2.063,
+    "cost_source": "models.yaml",
+    "confusion_matrix": {
+      "SIMPLE": {
+        "SIMPLE": 19,
+        "MODERATE": 2,
+        "COMPLEX": 1
+      },
+      "MODERATE": {
+        "MODERATE": 17,
+        "COMPLEX": 3,
+        "SIMPLE": 8
+      },
+      "EXPERT": {
+        "EXPERT": 4
+      },
+      "COMPLEX": {
+        "COMPLEX": 5,
+        "EXPERT": 7,
+        "SIMPLE": 2,
+        "MODERATE": 2
+      }
+    }
+  },
+  "ml_success_count": 70,
+  "ml_failure_ids": [],
+  "acceptance": {
+    "passed": true,
+    "failures": []
+  }
+}

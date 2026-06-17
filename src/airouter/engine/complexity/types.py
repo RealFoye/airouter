@@ -67,6 +67,51 @@ class ComplexityAnalysis:
 
 
 @dataclass(frozen=True)
+class ComplexityContext:
+    """传给 ML 后端的额外上下文。标记 auto 的字段由代码自动推导。"""
+
+    history_user_texts: tuple[str, ...] = ()
+    prev_assistant_text: str | None = None
+    prev_assistant_usage: dict | None = None
+    prev_route_decisions: tuple[str, ...] = ()
+    turn_index: int = 0
+    n_tools: int = 0
+    tool_result_length: int = 0
+    # ── 以下字段自动推导 ──
+    has_code_block: bool = False
+    has_prev_assistant: bool = False
+    context_tokens_est: int = 0
+
+    @staticmethod
+    def from_task(
+        text: str,
+        history: tuple[str, ...] = (),
+        prev_assistant: str | None = None,
+        prev_assistant_usage: dict | None = None,
+        prev_decisions: tuple[str, ...] = (),
+        turn_index: int = 0,
+        n_tools: int = 0,
+        tool_result_length: int = 0,
+    ) -> "ComplexityContext":
+        """构造时自动推导 has_code_block / has_prev_assistant / context_tokens_est。"""
+        all_texts = [text] + list(history)
+        if prev_assistant:
+            all_texts.append(prev_assistant)
+        return ComplexityContext(
+            history_user_texts=history,
+            prev_assistant_text=prev_assistant,
+            prev_assistant_usage=prev_assistant_usage,
+            prev_route_decisions=prev_decisions,
+            turn_index=turn_index,
+            n_tools=n_tools,
+            tool_result_length=tool_result_length,
+            has_code_block="```" in text,
+            has_prev_assistant=prev_assistant is not None,
+            context_tokens_est=sum(len(t) for t in all_texts) // 4,
+        )
+
+
+@dataclass(frozen=True)
 class ComplexityEvaluation:
     """Router 使用的完整返回值——同时包含 features 和 analysis。"""
 

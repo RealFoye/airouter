@@ -94,6 +94,33 @@ MEDIUM_SENSITIVITY_KEYWORDS = [
     "用户数据", "邮箱", "日志", "内部",
 ]
 
+# 关键词只作为弱信号。是否升级为 HIGH 还要结合数据本体、规模和任务意图。
+EXAMPLE_OR_CODE_CONTEXT_TERMS = [
+    "写", "编写", "实现", "函数", "方法", "校验", "验证", "格式化", "正则",
+    "示例", "样例", "例子", "mock", "fake", "dummy", "test", "测试",
+    "生成器", "parser", "formatter", "validator", "normalize",
+]
+REAL_DATA_CONTEXT_TERMS = [
+    "以下", "这些", "这批", "名单", "列表", "客户", "员工", "用户表", "生产数据",
+    "真实", "数据库", "表格", "csv", "excel", "附件", "文件", "日志", "批量",
+    "全部", "所有", "导入", "导出", "清洗", "脱敏", "处理",
+]
+EXTERNAL_OR_IRREVERSIBLE_TERMS = [
+    "外部", "第三方", "供应商", "发送", "发给", "上传", "同步", "导出",
+    "公开", "分享", "删除", "修改", "更新", "写入", "生产", "线上",
+]
+SECRET_OPERATION_TERMS = [
+    "存储", "保存", "落库", "加密", "解密", "轮换", "泄露", "配置",
+    "环境变量", "数据库", "权限", "鉴权", "登录",
+]
+SECRET_FIELD_TERMS = ["密码", "token", "密钥", "api key", "apikey", "secret"]
+PHONE_RE = re.compile(r"(?:\+?86[-\s]?)?1[3-9]\d[-\s]?\d{4}[-\s]?\d{4}")
+EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
+ID_CARD_RE = re.compile(r"\b\d{17}[\dXx]\b")
+SECRET_LITERAL_RE = re.compile(
+    r"(?i)(?:api[_-]?key|access[_-]?token|secret|token|密钥)\s*[:=]\s*[\"']?[A-Za-z0-9_\-]{12,}"
+)
+
 
 # ── 上下文需求推断规则 ──────────────────────────────────────
 HEAVY_CONTEXT_KEYWORDS = [
@@ -183,22 +210,70 @@ class TaskAnalyzer:
         return _rule_infer_complexity(desc, desc_lower)
 
     def _infer_risk_level(self, desc: str, desc_lower: str) -> RiskLevel:
+        sensitive_signal = (
+            self._contains_any(desc, desc_lower, HIGH_SENSITIVITY_KEYWORDS)
+            or self._count_sensitive_values(desc) > 0
+            or bool(SECRET_LITERAL_RE.search(desc))
+        )
+        if sensitive_signal and self._contains_any(desc, desc_lower, EXTERNAL_OR_IRREVERSIBLE_TERMS):
+            return RiskLevel.HIGH
+        if bool(SECRET_LITERAL_RE.search(desc)):
+            return RiskLevel.HIGH
         for kw in HIGH_RISK_KEYWORDS:
             if kw.lower() in desc_lower or kw in desc:
                 return RiskLevel.HIGH
+        if sensitive_signal and self._contains_any(desc, desc_lower, REAL_DATA_CONTEXT_TERMS):
+            return RiskLevel.MEDIUM
         for kw in MEDIUM_RISK_KEYWORDS:
             if kw.lower() in desc_lower or kw in desc:
                 return RiskLevel.MEDIUM
         return RiskLevel.LOW
 
     def _infer_sensitivity(self, desc: str, desc_lower: str) -> SensitivityLevel:
-        for kw in HIGH_SENSITIVITY_KEYWORDS:
-            if kw.lower() in desc_lower or kw in desc:
-                return SensitivityLevel.HIGH
-        for kw in MEDIUM_SENSITIVITY_KEYWORDS:
-            if kw.lower() in desc_lower or kw in desc:
-                return SensitivityLevel.MEDIUM
+        high_signal = self._contains_any(desc, desc_lower, HIGH_SENSITIVITY_KEYWORDS)
+        medium_signal = self._contains_any(desc, desc_lower, MEDIUM_SENSITIVITY_KEYWORDS)
+        example_context = self._contains_any(desc, desc_lower, EXAMPLE_OR_CODE_CONTEXT_TERMS)
+        real_data_context = self._contains_any(desc, desc_lower, REAL_DATA_CONTEXT_TERMS)
+        external_or_mutating = self._contains_any(desc, desc_lower, EXTERNAL_OR_IRREVERSIBLE_TERMS)
+        secret_operation = self._contains_any(desc, desc_lower, SECRET_FIELD_TERMS) and self._contains_any(
+            desc,
+            desc_lower,
+            SECRET_OPERATION_TERMS,
+        )
+        sensitive_value_count = self._count_sensitive_values(desc)
+        has_secret_literal = bool(SECRET_LITERAL_RE.search(desc))
+
+        if has_secret_literal:
+            return SensitivityLevel.HIGH
+        if sensitive_value_count >= 3:
+            return SensitivityLevel.HIGH
+        if sensitive_value_count > 0 and (real_data_context or external_or_mutating):
+            return SensitivityLevel.HIGH
+        if secret_operation:
+            return SensitivityLevel.HIGH
+        if high_signal and external_or_mutating:
+            return SensitivityLevel.HIGH
+        if high_signal and real_data_context and not example_context:
+            return SensitivityLevel.HIGH
+
+        if sensitive_value_count > 0:
+            return SensitivityLevel.LOW if example_context else SensitivityLevel.MEDIUM
+        if high_signal:
+            return SensitivityLevel.LOW if example_context else SensitivityLevel.MEDIUM
+        if medium_signal:
+            return SensitivityLevel.MEDIUM
         return SensitivityLevel.LOW
+
+    @staticmethod
+    def _contains_any(desc: str, desc_lower: str, terms: list[str]) -> bool:
+        return any(term.lower() in desc_lower or term in desc for term in terms)
+
+    @staticmethod
+    def _count_sensitive_values(desc: str) -> int:
+        phone_hits = PHONE_RE.findall(desc)
+        email_hits = EMAIL_RE.findall(desc)
+        id_hits = ID_CARD_RE.findall(desc)
+        return len(phone_hits) + len(email_hits) + len(id_hits)
 
     def _infer_verifiability(
         self, category: TaskCategory, complexity: ComplexityLevel

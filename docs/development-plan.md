@@ -245,6 +245,7 @@ make test-unit
 | 6.5 | Level 3 策略回测：全程 Tier 1 vs 智能路由（成本/质量对比报告） | 必做 | `src/airouter/engine/benchmark/reporter.py` | ✅ 2026-06-08（20 reporter + 14 runner unit + 8 integration） |
 | 6.7 | Finance Benchmark：36 cases × 5 models + 规则评分 + 中文报告 | 必做 | `src/airouter/engine/benchmark/finance_*.py` | ✅ 2026-06-09（80 unit + 8 integration） |
 | 6.8 | Finance Judge 辅助审计：MiniMax-M3 独立评分 + --judge-existing CLI + 审计章节 | 可降级 | `src/airouter/engine/benchmark/finance_judge.py` | ✅ 2026-06-10（44 unit + 2 integration） |
+| 6.9 | Routing Ground Truth Benchmark：Oracle 真值评测 + 4 层评分链 + 策略回放 + 沙箱 | 必做 | `src/airouter/engine/benchmark/ground_truth_*.py` | ✅ 2026-06-14（1181 unit + 3 integration，v4 前置修复完成：--limit 精确切片 + Oracle 完整 case 过滤 + forbidden_outputs 四类语义 + action 归一化 + manifest 六项强校验 + 沙箱 pre/post-patch + 独立 Judge 模块 + ThreadPoolExecutor 并发 + --rerun 全量重跑） |
 | 6.6 | Context Rot 验证实验：3 模型×3 长度×3 任务=27 次调用 + 退化曲线 | 可降级 | `scripts/context_budget_experiment.py` | 验证退化趋势数据 |
 
 ### Phase 8：Web 平台

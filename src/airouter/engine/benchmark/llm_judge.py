@@ -165,7 +165,7 @@ def _judge_one(
 def run_judge(
     cases_path: str,
     raw_dir: str,
-    judge_model: str = "claude-sonnet-4-6",
+    judge_model: str = "MiniMax-M3",
     api_base: str = "https://token.cvte.com/v1",
     api_key: str | None = None,
     output_path: str | None = None,
@@ -316,7 +316,7 @@ def build_summary(
 
     # Estimate cost based on judge model pricing
     cost_map = {
-        "claude-sonnet-4-6": (0.0216, 0.108),
+        "MiniMax-M3": (0.00216, 0.00864),
         "qwen3.7-max": (0.018, 0.054),
         "deepseek-v4-pro": (0.003132, 0.006264),
         "deepseek-v4-flash": (0.001008, 0.002016),
@@ -376,7 +376,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="LLM Judge for benchmark outputs")
     parser.add_argument("--cases", default="data/benchmarks/level2/router_quality_cases.yaml")
     parser.add_argument("--raw-dir", default="runs/benchmarks/level2/20260608_202410/raw_outputs")
-    parser.add_argument("--judge-model", default="claude-sonnet-4-6")
+    parser.add_argument("--judge-model", default="MiniMax-M3")
     parser.add_argument("--output", default="runs/benchmarks/level2/20260608_202410/llm_judge_results.json")
     parser.add_argument("--api-base", default="https://token.cvte.com/v1")
     parser.add_argument("--resume", help="Resume from existing results file (skip already scored)")

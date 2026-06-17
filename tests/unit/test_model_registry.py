@@ -109,11 +109,11 @@ def test_registry_contains(registry: ModelRegistry):
 
 
 def test_registry_real_data():
-    """验证实际 models.yaml 能加载 8 个模型。"""
+    """验证实际 models.yaml 能加载 7 个可调用模型。"""
     from airouter.config import load_models
     config = load_models()
     registry = ModelRegistry(config)
-    assert len(registry) == 8
-    assert len(registry.get_tier1_models()) == 4
+    assert len(registry) == 7
+    assert len(registry.get_tier1_models()) == 3
     assert len(registry.get_tier2_models()) == 3
     assert len(registry.get_tier3_models()) == 1

@@ -1,4 +1,4 @@
-"""ai-router benchmark 命令：Level 1 离线规则 + Level 2 模型质量 + Level 3 策略回测 + Finance 企业财务。"""
+"""ai-router benchmark 命令：Level 1 离线规则 + Level 2 模型质量 + Level 3 策略回测 + Finance 企业财务 + Routing Ground Truth。"""
 
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ def _exit_error(message: str, output_format: str) -> NoReturn:
 
 @app.callback(invoke_without_command=True)
 def benchmark(
-    level: str = typer.Option(..., "--level", "-l", help="Benchmark level: 1, 2, 3, or finance"),
+    level: str = typer.Option(..., "--level", "-l", help="Benchmark level: 1, 2, 3, finance, or routing"),
     cases: Optional[str] = typer.Option(None, "--cases", "-c", help="Cases YAML 路径 (L1/L2 only)"),
     fail_fast: bool = typer.Option(False, "--fail-fast", help="首次失败即停止"),
     resume: bool = typer.Option(False, "--resume", help="断点续跑"),
@@ -61,6 +61,8 @@ def benchmark(
     # Level 3 options
     case_set: str = typer.Option("all", "--case-set", help="L3: case set (all|l1|l2)"),
     baseline_model: str = typer.Option("qwen3.7-max", "--baseline-model", help="L3: baseline model"),
+    # Routing options
+    rerun: bool = typer.Option(False, "--rerun", help="Routing: 全量重跑（与 --limit/--resume 互斥）"),
 ) -> None:
     """运行 Benchmark 验证路由决策正确性。"""
     level_norm = str(level).lower().strip()
@@ -88,9 +90,15 @@ def benchmark(
             workers, judge, judge_models, judge_workers, skip_pairwise,
             judge_existing, rescore, case_ids,
         )
+    elif level_norm == "routing":
+        _run_routing(
+            cases, resume, output_format, real_api, run_id,
+            output_dir, workers, limit, rate_limit, rerun,
+            judge, judge_models, judge_workers, rescore,
+        )
     else:
         _exit_error(
-            f"不支持的 level: {level}。当前支持 --level 1, 2, 3, 或 finance",
+            f"不支持的 level: {level}。当前支持 --level 1, 2, 3, finance, 或 routing",
             output_format,
         )
 
@@ -975,6 +983,310 @@ _CATEGORY_NAMES = {
     "BUDGET_VARIANCE": "预算分析",
     "POLICY_QA": "制度问答",
 }
+
+
+# ── Routing Ground Truth ─────────────────────────────────────
+
+
+def _run_routing(
+    cases: str | None,
+    resume: bool,
+    output_format: str,
+    real_api: bool,
+    run_id: str | None,
+    output_dir: str | None,
+    workers: int = 5,
+    limit: int | None = None,
+    rate_limit: int = 20,
+    rerun: bool = False,
+    judge: bool = False,
+    judge_models_str: str | None = None,
+    judge_workers: int = 20,
+    rescore: bool = False,
+) -> None:
+    """运行 Routing Ground Truth Benchmark。"""
+    from airouter.engine.benchmark.ground_truth_report import save_report
+    from airouter.engine.benchmark.ground_truth_runner import GroundTruthRunner
+
+    # CLI 互斥校验
+    if rerun and limit is not None:
+        _exit_error("--rerun 与 --limit 不能同时使用", output_format)
+    if rerun and resume:
+        _exit_error("--rerun 与 --resume 不能同时使用", output_format)
+
+    # Rescore 互斥校验
+    if rescore:
+        if real_api:
+            _exit_error("--rescore 不得与 --real-api 混用", output_format)
+        if not output_dir:
+            _exit_error("--rescore 必须指定 --output-dir", output_format)
+        if not cases:
+            _exit_error("--rescore 必须指定 --cases", output_format)
+
+        from airouter.engine.benchmark.ground_truth_runner import rescore_run
+
+        run_dir = Path(output_dir)
+        console.print("[bold]Routing 离线重评分[/bold]")
+        console.print(f"  Run dir: {run_dir}")
+        console.print(f"  Cases: {cases}")
+
+        try:
+            output_path = rescore_run(run_dir, Path(cases))
+            console.print(f"  [green]✓[/green] 重评分完成: {output_path.name}")
+
+            # 简要统计
+            import json as _json
+            old_results = [
+                _json.loads(line) for line in (run_dir / "results.jsonl").read_text().strip().split("\n")
+            ]
+            new_results = [
+                _json.loads(line) for line in output_path.read_text().strip().split("\n")
+            ]
+            old_pass = sum(1 for r in old_results if r.get("final_pass"))
+            new_pass = sum(1 for r in new_results if r.get("final_pass"))
+            console.print(f"  Passing pairs: {old_pass} → {new_pass}")
+        except Exception as e:
+            _exit_error(f"重评分失败: {e}", output_format)
+        return
+
+    # Judge 需要显式指定 --judge-model
+    if judge and not judge_models_str:
+        _exit_error("--judge 需要 --judge-model", output_format)
+
+    judge_models_list = (
+        [m.strip() for m in judge_models_str.split(",")] if judge_models_str else None
+    )
+
+    results_dir = Path(output_dir) if output_dir else None
+    force_mock = not real_api
+
+    try:
+        runner = GroundTruthRunner(
+            results_dir=results_dir,
+            force_mock=force_mock,
+            workers=workers,
+            rate_limit_rpm=rate_limit,
+            allow_mock_fallback=not real_api,  # --real-api 时禁止 MockAdapter 降级
+        )
+
+        dataset: Literal["dev", "holdout", "all"] = "all"
+        if cases:
+            if "engineering" in cases:
+                dataset = "dev"
+            elif "routing_ground_truth" in cases:
+                dataset = "holdout"
+
+        if rerun:
+            summary = runner.run_with_reruns(
+                dataset=dataset,
+                run_id=run_id,
+            )
+        else:
+            summary = runner.run(
+                dataset=dataset,
+                resume=resume,
+                run_id=run_id,
+                limit=limit,
+            )
+
+        # Judge 阶段（可选）
+        if judge and judge_models_list:
+            from airouter.engine.benchmark.ground_truth_judge import (
+                build_judged_results,
+                load_judge_results,
+                run_ground_truth_judge,
+                save_judged_results,
+            )
+            from airouter.engine.benchmark.ground_truth_runner import (
+                _load_deduped_by_run,
+            )
+
+            judge_model = judge_models_list[0]  # 暂时只支持一个 judge model
+            run_dir = runner._results_dir / summary.run_id
+            # Prefer rescored results if available
+            results_path = run_dir / "results.rescored.jsonl"
+            if not results_path.exists():
+                results_path = run_dir / "results.jsonl"
+            all_results = _load_deduped_by_run(results_path)
+            all_cases = runner._load_cases(dataset)
+
+            # 创建 judge executor（real API 模式）
+            judge_executor = None
+            if not force_mock:
+                judge_executor = runner._executor
+
+            # Snapshot physical call counter before judge
+            judge_calls_before = (
+                judge_executor.snapshot_physical_calls()
+                if judge_executor else 0
+            )
+
+            new_judge_results, mock_judge_count, api_judge_count = run_ground_truth_judge(
+                cases=all_cases,
+                results=all_results,
+                judge_model=judge_model,
+                run_dir=run_dir,
+                force_mock=force_mock,
+                executor=judge_executor,
+                limit=limit,
+                workers=judge_workers,
+            )
+
+            # Delta = actual physical API calls for judge (includes retries)
+            judge_calls_after = (
+                judge_executor.snapshot_physical_calls()
+                if judge_executor else 0
+            )
+            physical_judge_calls = judge_calls_after - judge_calls_before
+
+            # 重建 judged results
+            all_judge_results = load_judge_results(run_dir / "judge_results.jsonl")
+            judged = build_judged_results(all_results, all_judge_results)
+            save_judged_results(run_dir / "results.judged.jsonl", judged)
+
+            # 从 judged results 重新生成 Oracle 和策略回放
+            # 1. 保存 judged aggregated
+            judged_artifacts = runner.rebuild_analysis(
+                all_cases, judged, dataset, require_judge=True,
+            )
+
+            judged_aggregated_path = run_dir / "aggregated.judged.jsonl"
+            with open(judged_aggregated_path, "w", encoding="utf-8") as f:
+                for agg in judged_artifacts.aggregated:
+                    f.write(agg.model_dump_json() + "\n")
+
+            # 2. 保存 judged Oracle
+            judged_oracle_path = run_dir / "oracles.judged.jsonl"
+            with open(judged_oracle_path, "w", encoding="utf-8") as f:
+                for oracle in judged_artifacts.oracles:
+                    f.write(oracle.model_dump_json() + "\n")
+
+            # 3. 更新 summary 的 Oracle 和策略回放结果
+            summary.oracle_results = judged_artifacts.oracles
+            summary.signal_strategy_results = judged_artifacts.signal_results
+            summary.end_to_end_strategy_results = judged_artifacts.e2e_results
+            summary.dev_signal_results = judged_artifacts.dev_signal_results
+            summary.dev_e2e_results = judged_artifacts.dev_e2e_results
+            summary.holdout_signal_results = judged_artifacts.holdout_signal_results
+            summary.holdout_e2e_results = judged_artifacts.holdout_e2e_results
+            summary.complete_cases = len(judged_artifacts.complete_cases)
+            summary.analysis_deferred = judged_artifacts.analysis_deferred
+
+            # 更新 summary
+            summary.mock_judge_evaluations = mock_judge_count
+            summary.judge_initial_calls = api_judge_count
+            summary.judge_retry_attempts = max(0, physical_judge_calls - api_judge_count)
+            summary.judge_degraded = (
+                len(all_judge_results) > 0
+                and all(jr.status == "failed" for jr in all_judge_results)
+            )
+            summary.judge_models = [judge_model]
+
+            # 更新 total_physical_api_calls（累加 judge 物理调用）
+            summary.total_physical_api_calls += physical_judge_calls
+
+            # 保存更新后的 summary
+            summary_path = run_dir / "summary.json"
+            summary_path.write_text(
+                summary.model_dump_json(indent=2),
+                encoding="utf-8",
+            )
+
+        if output_format == "json":
+            print(json.dumps(summary.model_dump(mode="json"), indent=2, ensure_ascii=False))
+        else:
+            _output_routing_rich(summary)
+
+            # Generate Markdown report
+            run_dir = runner._results_dir / summary.run_id
+            report_path = run_dir / "report.md"
+            save_report(summary, str(report_path))
+            console.print(f"\n[dim]报告已生成：{report_path}[/dim]")
+
+    except (FileNotFoundError, ValueError) as e:
+        if output_format == "json":
+            print(json.dumps({"error": str(e)}, ensure_ascii=False), file=sys.stderr)
+        else:
+            console.print(f"[red]错误：{e}[/red]")
+        raise typer.Exit(code=1)
+
+
+def _output_routing_rich(summary) -> None:
+    """Rich 格式输出 Routing Ground Truth 结果。"""
+    overview = Text()
+    overview.append("Run ID: ", style="bold")
+    overview.append(f"{summary.run_id}\n")
+    overview.append("用例数: ", style="bold")
+    overview.append(f"{summary.total_cases}（Dev: {summary.dev_cases}, Holdout: {summary.holdout_cases}）\n")
+    overview.append("模型: ", style="bold")
+    overview.append(f"{', '.join(summary.models)}\n")
+    overview.append("API 调用: ", style="bold")
+    overview.append(f"{summary.total_physical_api_calls}\n")
+    overview.append("估算成本: ", style="bold")
+    overview.append(f"¥{summary.total_estimated_cost_cny:.4f}\n")
+    overview.append("Oracle 数: ", style="bold")
+    overview.append(f"{len(summary.oracle_results)}")
+    console.print(Panel(overview, title="[bold blue]Routing Ground Truth 总览[/bold blue]", border_style="blue"))
+
+    # Oracle action 分布
+    action_dist: dict[str, int] = {}
+    for o in summary.oracle_results:
+        action_dist[o.oracle_action] = action_dist.get(o.oracle_action, 0) + 1
+
+    if action_dist:
+        action_table = Table(title="Oracle Action 分布")
+        action_table.add_column("Action", style="cyan")
+        action_table.add_column("Count", justify="right")
+        action_table.add_column("Pct", justify="right")
+        total = len(summary.oracle_results)
+        for action, count in sorted(action_dist.items(), key=lambda x: -x[1]):
+            action_table.add_row(action, str(count), f"{count / total:.1%}")
+        console.print(action_table)
+
+    # A 层策略对比
+    if summary.signal_strategy_results:
+        strat_table = Table(title="A 层策略对比")
+        strat_table.add_column("策略", style="cyan")
+        strat_table.add_column("Acceptable Match", justify="right")
+        strat_table.add_column("Cost Regret", justify="right")
+        strat_table.add_column("Under-routing", justify="right")
+        strat_table.add_column("Over-routing", justify="right")
+        strat_table.add_column("Severe Under", justify="right")
+        for s in summary.signal_strategy_results:
+            strat_table.add_row(
+                s.strategy_name,
+                f"{s.acceptable_match_rate:.1%}",
+                f"{s.cost_regret:+.1%}",
+                f"{s.under_routing_rate:.1%}",
+                f"{s.over_routing_rate:.1%}",
+                f"{s.severe_under_routing_rate:.1%}",
+            )
+        console.print(strat_table)
+
+    # B 层策略
+    if summary.end_to_end_strategy_results:
+        e2e_table = Table(title="B 层策略（端到端）")
+        e2e_table.add_column("策略", style="cyan")
+        e2e_table.add_column("Acceptable Match", justify="right")
+        e2e_table.add_column("Cost Regret", justify="right")
+        e2e_table.add_column("Under-routing", justify="right")
+        for s in summary.end_to_end_strategy_results:
+            e2e_table.add_row(
+                s.strategy_name,
+                f"{s.acceptable_match_rate:.1%}",
+                f"{s.cost_regret:+.1%}",
+                f"{s.under_routing_rate:.1%}",
+            )
+        console.print(e2e_table)
+
+    # CCH reminder
+    if summary.total_physical_api_calls > 0:
+        console.print(Panel(
+            "models.yaml 价格是估算值，实际成本以 CCH 后台账单为准。\n"
+            "完成真实 API 调用后请导出 CCH usage CSV 进行对账。",
+            title="[yellow]成本对账提醒[/yellow]",
+            border_style="yellow",
+        ))
 
 
 def _output_finance_rich(summary) -> None:

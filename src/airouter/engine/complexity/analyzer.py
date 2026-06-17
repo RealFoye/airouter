@@ -11,6 +11,7 @@ from airouter.engine.complexity.types import (
     ROUTE_TO_COMPLEXITY,
     BackendMetadata,
     ComplexityAnalysis,
+    ComplexityContext,
     ComplexityEvaluation,
     MLPrediction,
 )
@@ -83,8 +84,11 @@ class ComplexityAnalyzer:
         result = self.analyze(task_description)
         return result.features
 
-    def analyze(self, task_description: str) -> ComplexityEvaluation:
-        """完整分析：返回 ComplexityEvaluation（features + analysis）。"""
+    def analyze(self, task_description: str, context: ComplexityContext | None = None) -> ComplexityEvaluation:
+        """完整分析：返回 ComplexityEvaluation（features + analysis）。
+
+        context: 可选的 ML 上下文（多轮历史、工具元数据等），传递给 ML 后端。
+        """
         features = self._rule_analyzer.extract_features(task_description)
 
         if self._config.mode == "rules" or self._backend is None:
@@ -104,7 +108,7 @@ class ComplexityAnalyzer:
             return ComplexityEvaluation(features=features, analysis=analysis)
 
         # ML 可用：获取预测
-        ml_pred = self._get_ml_prediction(task_description)
+        ml_pred = self._get_ml_prediction(task_description, context)
         if ml_pred is None:
             analysis = ComplexityAnalysis(
                 rule_complexity=features.complexity,
@@ -148,10 +152,10 @@ class ComplexityAnalyzer:
         )
         return ComplexityEvaluation(features=features, analysis=analysis)
 
-    def _get_ml_prediction(self, task_description: str) -> MLPrediction | None:
+    def _get_ml_prediction(self, task_description: str, context: ComplexityContext | None = None) -> MLPrediction | None:
         """尝试获取 ML 预测。失败时返回 None 或抛错。"""
         try:
-            result: MLPrediction = self._backend.predict(task_description)
+            result: MLPrediction = self._backend.predict(task_description, context)
             return result
         except Exception as exc:
             if self._config.require_runtime:

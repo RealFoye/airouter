@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from typing import Any
 
@@ -52,6 +53,12 @@ class ModelExecutor:
         self._default_max_tokens = default_max_tokens
         self._last_call_time: dict[str, float] = {}
         self._mock_adapters: dict[str, MockAdapter] = {}
+        # Per-model rate limit locks (different models don't block each other)
+        self._rate_locks: dict[str, threading.Lock] = {}
+        self._rate_locks_lock = threading.Lock()
+        # Thread-safe physical API call counter
+        self._physical_call_count = 0
+        self._physical_call_lock = threading.Lock()
 
     def validate_models(self, model_names: list[str]) -> None:
         """Validate all model names exist in registry. Raises ValueError if not."""
@@ -117,6 +124,28 @@ class ModelExecutor:
             return self._mock_adapters[entry.name]
         return self._factory.get_adapter(entry)
 
+    def get_physical_call_count(self) -> int:
+        """返回累计物理 API 调用数（线程安全）。"""
+        with self._physical_call_lock:
+            return self._physical_call_count
+
+    def reset_physical_call_count(self) -> int:
+        """重置计数器并返回旧值。"""
+        with self._physical_call_lock:
+            old = self._physical_call_count
+            self._physical_call_count = 0
+            return old
+
+    def snapshot_physical_calls(self) -> int:
+        """获取当前计数器快照（用于 before/after delta 计算）。"""
+        with self._physical_call_lock:
+            return self._physical_call_count
+
+    def _increment_physical_calls(self) -> None:
+        """线程安全地递增物理调用计数。"""
+        with self._physical_call_lock:
+            self._physical_call_count += 1
+
     def _call_with_retry(
         self,
         adapter: BaseAdapter,
@@ -137,6 +166,7 @@ class ModelExecutor:
         for attempt in range(1, self._max_retries + 1):
             try:
                 self._last_call_time[model_name] = time.monotonic()
+                self._increment_physical_calls()
                 response = adapter.chat(model_name, messages, **kwargs)
                 return response, attempt
             except AdapterAuthError:
@@ -165,15 +195,27 @@ class ModelExecutor:
         ) from last_error
 
     def _wait_for_rate_limit(self, model_name: str) -> None:
-        """Enforce per-model rate limit by sleeping if needed."""
+        """Enforce per-model rate limit by sleeping if needed.
+
+        Uses per-model lock so different models don't block each other.
+        """
         if self._rate_limit_rpm <= 0:
             return
-        min_interval = 60.0 / self._rate_limit_rpm
-        last_time = self._last_call_time.get(model_name)
-        if last_time is not None:
-            elapsed = time.monotonic() - last_time
-            if elapsed < min_interval:
-                time.sleep(min_interval - elapsed)
+        lock = self._get_rate_lock(model_name)
+        with lock:
+            min_interval = 60.0 / self._rate_limit_rpm
+            last_time = self._last_call_time.get(model_name)
+            if last_time is not None:
+                elapsed = time.monotonic() - last_time
+                if elapsed < min_interval:
+                    time.sleep(min_interval - elapsed)
+            self._last_call_time[model_name] = time.monotonic()
+
+    def _get_rate_lock(self, model_name: str) -> threading.Lock:
+        with self._rate_locks_lock:
+            if model_name not in self._rate_locks:
+                self._rate_locks[model_name] = threading.Lock()
+            return self._rate_locks[model_name]
 
     def _calculate_cost(
         self, entry: ModelEntry, input_tokens: int, output_tokens: int

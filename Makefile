@@ -1,10 +1,13 @@
-.PHONY: dev test-unit test-integration test-cli test-all lint smoke install clean
+.PHONY: dev web test-unit test-integration test-cli test-all lint smoke install clean
 
 install:
 	pip install -e ".[dev]"
 
 dev:
 	uvicorn airouter.api.main:app --reload --host 0.0.0.0 --port 8000
+
+web:
+	streamlit run web/app.py --server.address 127.0.0.1 --server.port 8501
 
 test-unit:
 	pytest tests/unit/ -v --cov=src/airouter --cov-report=term-missing

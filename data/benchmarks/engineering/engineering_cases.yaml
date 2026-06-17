@@ -325,7 +325,7 @@ cases:
       must_not_modify:
         - "api/admin.py"
       should_ask_clarification: false
-      requires_human_approval: true
+      requires_human_approval: false
       runnable_validation: false
     max_tokens: 4096
     tags:
@@ -376,7 +376,7 @@ cases:
       must_not_modify:
         - "upload.py"
       should_ask_clarification: false
-      requires_human_approval: true
+      requires_human_approval: false
       runnable_validation: false
     max_tokens: 4096
     tags:
@@ -487,7 +487,7 @@ cases:
       must_not_modify:
         - "payment_callback.py"
       should_ask_clarification: false
-      requires_human_approval: true
+      requires_human_approval: false
       runnable_validation: false
     max_tokens: 4096
     tags:

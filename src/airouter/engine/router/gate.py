@@ -42,9 +42,10 @@ class RoutingGate:
         reasons = []
         f = gate_input.features
 
-        # 条件1: 敏感数据
-        if f.sensitivity == SensitivityLevel.HIGH:
-            reasons.append("任务涉及敏感数据")
+        # 条件1: 高敏 + 高风险
+        # 高敏本身不直接等于人工审核；只有存在业务影响、外发、生产或变更风险时才升级。
+        if f.sensitivity == SensitivityLevel.HIGH and f.risk_level == RiskLevel.HIGH:
+            reasons.append("任务涉及高敏数据且存在业务风险")
 
         # 条件2: 高风险 + 降级/拆分策略
         if f.risk_level == RiskLevel.HIGH:
@@ -107,6 +108,10 @@ class RoutingGate:
         # risk_level == HIGH → 追加 human_review
         if features.risk_level == RiskLevel.HIGH:
             gates.append("human_review")
+
+        # 敏感数据不是自然语言关键词的硬判，但一旦综合判为中/高敏，应显式保留隐私检查。
+        if features.sensitivity in (SensitivityLevel.MEDIUM, SensitivityLevel.HIGH):
+            gates.append("privacy_check")
 
         # verifiability == LOW → 只能靠 LLM 评分或人工
         if features.verifiability.value == "LOW":

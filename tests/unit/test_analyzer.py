@@ -87,6 +87,39 @@ def test_sensitivity_detection(analyzer: TaskAnalyzer):
     assert features.sensitivity == SensitivityLevel.HIGH
 
 
+def test_phone_formatter_example_is_not_high_sensitivity(analyzer: TaskAnalyzer):
+    features = analyzer.extract_features(
+        "帮我写一个Python函数，把用户输入的手机号格式化成 +86 138-1234-5678 的标准格式，非法输入返回 None。"
+    )
+    assert features.category == TaskCategory.CODE_GENERATION
+    assert features.sensitivity == SensitivityLevel.LOW
+    assert features.risk_level == RiskLevel.LOW
+
+
+def test_batch_customer_phone_data_is_high_sensitivity(analyzer: TaskAnalyzer):
+    features = analyzer.extract_features(
+        "请把以下客户手机号批量脱敏：13812345678、13912345678、18812345678。"
+    )
+    assert features.sensitivity == SensitivityLevel.HIGH
+    assert features.risk_level == RiskLevel.MEDIUM
+
+
+def test_external_phone_export_is_high_risk(analyzer: TaskAnalyzer):
+    features = analyzer.extract_features("导出全部客户手机号发给外部供应商")
+    assert features.sensitivity == SensitivityLevel.HIGH
+    assert features.risk_level == RiskLevel.HIGH
+
+
+def test_password_validation_function_is_not_high_sensitivity(analyzer: TaskAnalyzer):
+    features = analyzer.extract_features("写一个密码强度校验函数，返回 strong/weak。")
+    assert features.sensitivity == SensitivityLevel.LOW
+
+
+def test_secret_csv_cleaning_stays_high_sensitivity(analyzer: TaskAnalyzer):
+    features = analyzer.extract_features("数据清洗包含密码和密钥的CSV文件")
+    assert features.sensitivity == SensitivityLevel.HIGH
+
+
 def test_context_requirement_detection(analyzer: TaskAnalyzer):
     features = analyzer.extract_features("重构整个项目的所有模块")
     assert features.context_requirement == ContextLevel.HEAVY

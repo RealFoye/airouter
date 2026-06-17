@@ -72,11 +72,30 @@ def _make_input(
 
 # ── 条件1: 敏感数据 ─────────────────────────────────────────
 class TestCondition1_SensitiveData:
-    def test_high_sensitivity_triggers_review(self, gate):
-        features = _make_features(sensitivity=SensitivityLevel.HIGH)
+    def test_high_sensitivity_with_business_risk_triggers_review(self, gate):
+        features = _make_features(
+            sensitivity=SensitivityLevel.HIGH,
+            risk=RiskLevel.HIGH,
+        )
         result, reason = gate.check_human_review(_make_input(features=features))
         assert result is True
-        assert "敏感数据" in reason
+        assert "高敏数据" in reason
+
+    def test_high_sensitivity_medium_risk_no_review(self, gate):
+        features = _make_features(
+            sensitivity=SensitivityLevel.HIGH,
+            risk=RiskLevel.MEDIUM,
+        )
+        result, _ = gate.check_human_review(_make_input(features=features))
+        assert result is False
+
+    def test_high_sensitivity_low_risk_no_review(self, gate):
+        features = _make_features(
+            sensitivity=SensitivityLevel.HIGH,
+            risk=RiskLevel.LOW,
+        )
+        result, _ = gate.check_human_review(_make_input(features=features))
+        assert result is False
 
     def test_low_sensitivity_no_trigger(self, gate):
         features = _make_features(

@@ -122,6 +122,30 @@ DeepSeek Qwen   GLM   (未来扩展)
     替代方案、预算状态、审核要求、质量门禁、兜底策略
 ```
 
+### 2.2.1 当前实现补充：OpenSquilla 与 Web 工作台
+
+截至当前版本，核心路由链路仍然保持“五层决策架构”，但复杂度判断与用户入口已经有两处重要扩展：
+
+1. **复杂度判断增加 OpenSquilla ML 信号**
+   - 旧链路：`TaskAnalyzer` 基于规则直接给出 `SIMPLE / MODERATE / COMPLEX / EXPERT`。
+   - 新链路：`ComplexityAnalyzer` 在规则结果之外，可选加载 OpenSquilla 的 390 维特征 + BGE embedding + LightGBM/ONNX 推理结果，再把 R0-R3 映射为 AirRouter 四级复杂度。
+   - 这只增强“复杂度”这一项任务画像；后续的模型能力过滤、策略生成、成本估算和 Gate 仍由 AirRouter 自己完成。
+
+2. **普通用户入口从管理面板转为 Chat 工作台**
+   - `web/app.py` 是当前主要体验：用户输入 API Key 后，像 ChatGPT 一样输入任务，先点“分析”，看到推荐模型/处理方式/成本对比，再决定是否执行。
+   - 分析阶段默认走本地 Router + OpenSquilla `opensquilla` 模式；如果 OpenSquilla bundle 或依赖不可用，会回退到规则分析。
+   - 执行阶段才调用用户 API Key 对应的真实模型；标题生成、深度复核、上下文压缩也会按需调用模型。
+   - 原有 Streamlit 管理页仍保留在“管理员入口”，用于查看高级路由分析、消费审计、Benchmark 结果和治理配置，不是普通用户主流程。
+
+相关文件：
+
+| 能力 | 主要文件 |
+|------|----------|
+| OpenSquilla 复杂度扩展 | `src/airouter/engine/complexity/analyzer.py`、`src/airouter/engine/complexity/ml_backend.py`、`data/complexity.yaml` |
+| OpenSquilla 增量设计 | `docs/system-design-ml-complexity-extension.md` |
+| 普通用户 Web 工作台 | `web/app.py`、`src/airouter/web/ui.py` |
+| Web 交接说明 | `docs/web-workbench-handoff.md` |
+
 ### 2.3 API 接口定义（OpenAPI 摘要）
 
 FastAPI 会自动生成 OpenAPI Spec；本节定义 Week 1 架构评审需要的接口契约，Week 2-3 按此落地实现。
@@ -290,7 +314,9 @@ class TaskFeatures:
     preferred_capabilities: set[str]          # 加分能力集合
 ```
 
-**关键区分：** `risk_level` 是综合风险等级（模型输出错误后的业务影响、执行影响和返工成本），`sensitivity` 专指数据敏感性（是否涉及权限、财务、个人隐私），`verifiability` 指结果能否通过自动手段验证，`output_strictness` 指输出格式要求的严格程度。
+**关键区分：** `risk_level` 是综合风险等级（模型输出错误后的业务影响、执行影响、外发/写入/生产变更和返工成本），`sensitivity` 专指数据敏感性（是否包含真实个人信息、密钥、财务/薪资等数据本体），`verifiability` 指结果能否通过自动手段验证，`output_strictness` 指输出格式要求的严格程度。
+
+`sensitivity` 不能只靠关键词硬判。比如“写一个手机号格式化函数”只是代码示例，不等同于处理真实客户手机号；“批量脱敏客户手机号”是高敏数据处理，但如果不外发、不写生产，可以通过 `privacy_check` 自动执行；“导出全部客户手机号发给外部供应商”才是高敏 + 高风险，需要人工确认。
 
 **示例对比：**
 
@@ -301,6 +327,9 @@ class TaskFeatures:
 | SQL迁移脚本 | HIGH | MEDIUM | HIGH | HIGH |
 | 架构设计文档 | HIGH | LOW | LOW | MEDIUM |
 | 权限模块修改 | HIGH | HIGH | MEDIUM | MEDIUM |
+| 手机号格式化函数 | LOW | LOW | HIGH | MEDIUM |
+| 客户手机号批量脱敏 | MEDIUM | HIGH | HIGH | HIGH |
+| 客户手机号外发供应商 | HIGH | HIGH | MEDIUM | HIGH |
 
 #### 4.1.3 特征提取（双模式）
 
@@ -316,7 +345,35 @@ KEYWORD_RULES = {
 }
 ```
 
-#### 4.1.4 分类体系到模型推荐映射
+#### 4.1.4 OpenSquilla ML 复杂度增强
+
+OpenSquilla 接入后，AirRouter 的复杂度判断不再只有“关键词规则”一条路。当前实现把复杂度分析抽象为 `ComplexityAnalyzer`，支持四种 mode：
+
+| mode | ML 加载 | 路由行为 | 适用场景 |
+|------|---------|----------|----------|
+| `rules` | 否 | 纯规则判断复杂度 | 默认配置、生产保守模式 |
+| `shadow` | 是 | 规则结果生效，ML 只记录诊断 | 观察 ML 与规则差异，不改变路由 |
+| `opensquilla` | 是 | 使用 OpenSquilla `final_route_class` 替换复杂度 | Web 分析体验、离线实验、演示 |
+| `hybrid` | 是 | 使用 `raw_route_class` 在高置信时只升级不降级 | 生产增强候选，需要继续灰度验证 |
+
+OpenSquilla 的 R0-R3 与 AirRouter 复杂度映射如下：
+
+| OpenSquilla route class | AirRouter complexity | 常规候选 Tier |
+|-------------------------|----------------------|---------------|
+| R0 | SIMPLE | Tier 3 |
+| R1 | MODERATE | Tier 2 / Tier 3 |
+| R2 | COMPLEX | Tier 1 / Tier 2 |
+| R3 | EXPERT | Tier 1 |
+
+**边界说明：**
+
+- OpenSquilla 只决定复杂度，不直接决定最终模型。
+- 最终模型仍由 `ModelSelector` 根据能力、敏感性、上下文窗口、价格、质量先验和 Gate 共同决定。
+- `ml_raw` / `ml_final` 不能绕过预算、敏感数据策略、人工确认和质量门禁。
+- 当前 `data/complexity.yaml` 默认仍是 `rules`，因为 OpenSquilla 对 Engineering 任务有明显价值，但在 L1 普通任务上会产生过度升级；Web 工作台为了展示更强的语义分析能力，会在 `_run_analysis()` 中显式使用 `opensquilla`，不可用时回退 rules。
+- 更详细的特征空间、bundle 校验、失败降级和四种 mode 语义见 `docs/system-design-ml-complexity-extension.md`。
+
+#### 4.1.5 分类体系到模型推荐映射
 
 任务分类不是为了展示标签，而是直接决定候选 Tier、预算、质量门禁和是否需要人工批准。
 
@@ -408,6 +465,8 @@ allowed_tiers:
   EXPERT:
     default: [1]
 ```
+
+**敏感数据兜底规则：** 如果任务被判为 `sensitivity == HIGH`，而复杂度规则只允许 Tier 3，Selector 会临时把 Tier 2 加入候选池。原因是部分 Tier 3 模型不允许处理敏感数据，若仍只允许 Tier 3，会把“内部手机号脱敏 / 清洗 / 校验”这类可自动处理的任务误判为无候选、需要人工复核。真正需要人工确认的是 `sensitivity == HIGH` 且 `risk_level == HIGH`，例如外发客户信息、生产写入、权限变更或不可逆操作。
 
 #### 4.2.3 完整硬约束清单
 
@@ -1024,12 +1083,14 @@ task_hard_budget = task_soft_budget * project.task_budget_hard_limit_multiplier
 
 MVP阶段，如果满足以下**任一条件**，则 `requires_human_review = true`：
 
-1. `sensitivity == HIGH`（涉及敏感数据）
+1. `sensitivity == HIGH` 且 `risk_level == HIGH`（高敏数据同时存在外发、生产、写入、删除、权限或其他业务风险）
 2. `risk_level == HIGH` 且使用了降级/拆分策略（即 `strategy != SINGLE_MODEL` 或 `executor_tier > 1`）
 3. 选中模型的 `budget_status == "OVER_HARD_BUDGET"`（超硬预算，需审批才可执行）
 4. 无候选模型满足所有硬约束（系统兜底）
 5. `risk_level != LOW` 且 `quality_loss_vs_baseline > 0.20`（质量损失超过阈值）
 6. 任务类型在 `human_review_required_tasks` 配置列表中
+
+`sensitivity == MEDIUM/HIGH` 会追加 `privacy_check` 质量门禁；高敏但非高风险的任务（如内部脱敏、清洗、校验）不自动触发人工确认，但会避开不允许敏感数据的模型。
 
 Soft budget 超限不在 MVP 阶段自动触发人工批准，只作为 warning 和替代方案提示；hard budget 才触发批准或过滤。后续若加入交互式“用户选择保持强模型方案”，可把 soft budget + user confirmation 作为审批条件。
 
@@ -1713,6 +1774,76 @@ $ ai-router optimize --prompt my_prompt.txt
 ---
 
 ## 八、Web管控平台
+
+### 8.0 当前 Web 实现状态
+
+当前 Web 已经从早期“治理后台”演进为面向普通用户的 **Chat 工作台 + 管理员入口** 双层结构：
+
+1. **普通用户主流程：先分析，再执行**
+   - 用户只输入 API Key 登录，不需要账号、项目或部门。
+   - 登录后进入 `web/app.py` 的 Chat 工作台。
+   - 用户输入任务后先点击“分析”，系统用本地 Router 生成推荐方案。
+   - 页面展示推荐模型、处理方式、完成把握、预计成本、相对 `qwen3.7-max` 的节省比例和注意事项。
+   - 用户可以接受方案、手动改模型、选择更省钱/更稳妥，或先做深度复核。
+   - 只有点击“接受并执行”后，才真正调用被选中的执行模型。
+
+2. **分析阶段**
+   - Web 分析阶段优先使用 `opensquilla` mode，即 OpenSquilla 的 `final_route_class` 参与复杂度判断。
+   - 如果 OpenSquilla bundle、依赖或环境变量不可用，自动回退 rules。
+   - 分析阶段本身不调用被推荐模型，因此速度会很快；这是本地 Router 推理，不是大模型回答。
+
+3. **深度复核阶段**
+   - 用户点击“深度复核”后，系统调用 `MiniMax-M3` 对本地 Router 的推荐进行二次审计。
+   - 复核内容包括：任务是否被低估、是否漏掉业务风险、推荐模型是否过低/过高、是否需要先澄清、是否需要人工确认。
+   - 若 `MiniMax-M3` 不可用，可回退 `qwen3.7-max`。
+   - 复核结果不会自动覆盖原推荐，用户可以选择保留当前方案、采纳复核建议、恢复初始推荐或手动选择。
+
+4. **执行阶段**
+   - 执行模型使用用户 API Key 和 `data/models.yaml` 中对应的 OpenAI-compatible `api_base`。
+   - 输出采用流式展示，并显示“正在思考/生成”的等待状态。
+   - 执行中切换模型时，会保留当前对话上下文；后续消息用新模型继续。
+   - 当对话过长时，会用 `qwen3.7-max` 压缩旧上下文，保留当前任务和近期消息。
+
+5. **历史对话**
+   - 对话历史保存在 `runs/web/conversations.json`。
+   - 明文 API Key 不落盘，只用 API Key 的 SHA256 指纹隔离用户。
+   - 同一个 API Key 再登录可以看到自己的历史对话；退出登录只清当前登录态，不删除历史。
+   - 左侧历史列表使用模型生成短标题，并对长标题做单行省略。
+
+6. **管理员入口**
+   - 旧的治理页面仍保留在 Sidebar 的“管理员入口”折叠区。
+   - 包括高级路由分析、消费审计、上下文优化、Benchmark 结果和治理配置。
+   - 这些页面用于项目汇报和管理员诊断，不是普通用户必须理解的流程。
+
+当前 Web 关键文件：
+
+| 模块 | 文件 | 说明 |
+|------|------|------|
+| Chat 工作台 | `web/app.py` | 主流程、会话、附件、分析、复核、执行、流式输出 |
+| 公共 UI / 登录 / Sidebar | `src/airouter/web/ui.py` | 页面配置、API Key 登录、管理员入口、返回工作台 |
+| 管理页数据 | `src/airouter/web/data.py` | 读取模型、Benchmark、治理配置等展示数据 |
+| 管理员页面 | `web/pages/*.py` | 高级路由分析、消费审计、优化中心、Benchmark、治理配置 |
+| 路由核心 | `src/airouter/engine/router/router.py` | Router 五层决策链路 |
+| OpenSquilla 复杂度 | `src/airouter/engine/complexity/*.py` | rules/shadow/opensquilla/hybrid 模式 |
+
+### 8.0.1 附件、图片与多模态路径
+
+当前 Chat 工作台支持文字、图片、表格、PDF 和常见文本/代码附件：
+
+| 附件类型 | 处理方式 | 执行模型策略 |
+|----------|----------|--------------|
+| 图片（png/jpg/jpeg/webp） | 作为 multimodal content 传入模型 | 固定 `qwen3.7-plus` |
+| CSV/TSV | 解析为文本表格摘要，注入任务上下文 | 由 Router 正常推荐 |
+| XLSX/XLSM | 读取工作表与前若干行数据，注入任务上下文 | 由 Router 正常推荐 |
+| PDF | 提取文本页内容，注入任务上下文 | 由 Router 正常推荐 |
+| 文本/代码/日志 | 直接截断注入任务上下文 | 由 Router 正常推荐 |
+
+设计原则：
+
+- 图片任务走独立 `image_model` 路径，因为当前公司可用模型里只有 `qwen3.7-plus` 适合多模态。
+- 有图片附件时，页面会锁定执行模型为 `qwen3.7-plus`，避免用户切到不支持视觉的模型后失败。
+- 表格、PDF 和文本附件不是直接上传给所有模型，而是先提取为可读文本，再交给 Router 分析和执行模型处理。
+- 附件有数量、大小和文本长度限制，避免一次性把超大文件塞进上下文。
 
 ### 8.1 页面优先级分级
 

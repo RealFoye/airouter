@@ -20,7 +20,7 @@ from airouter.engine.complexity.artifact_verifier import (
     MANIFEST_SHA256,
     ArtifactVerifier,
 )
-from airouter.engine.complexity.types import MLPrediction
+from airouter.engine.complexity.types import ComplexityContext, MLPrediction
 
 log = logging.getLogger(__name__)
 
@@ -213,15 +213,19 @@ class OpenSquillaBackend:
     def manifest_hash(self) -> str | None:
         return self._manifest_hash
 
-    def predict(self, task_description: str) -> MLPrediction:
-        """执行 ML 推理。返回真实 MLPrediction 或抛 ComplexityBackendUnavailable。"""
+    def predict(self, task_description: str, context: ComplexityContext | None = None) -> MLPrediction:
+        """执行 ML 推理。返回真实 MLPrediction 或抛 ComplexityBackendUnavailable。
+
+        context: 可选的额外上下文（多轮历史、工具元数据等）。
+                 context=None 时自动推导行为不变。
+        """
         if not self._available or self._core is None or self._request_type is None:
             raise ComplexityBackendUnavailable("ML backend not initialized")
 
         with self._predict_lock:
             try:
                 t0 = time.perf_counter()
-                request = self._build_request(task_description)
+                request = self._build_request(task_description, context)
                 result = self._core.predict(request)
                 latency_ms = (time.perf_counter() - t0) * 1000
                 return self._map_result(result, latency_ms)
@@ -232,10 +236,29 @@ class OpenSquillaBackend:
                     f"predict failed: {exc}"
                 ) from exc
 
-    def _build_request(self, task_description: str) -> Any:
+    def _build_request(self, task_description: str, context: ComplexityContext | None = None) -> Any:
         request_type = self._request_type
         if request_type is None:
             raise ComplexityBackendUnavailable("request type not initialized")
+
+        if context is not None:
+            return request_type(
+                current_user_text=task_description,
+                history_user_texts=list(context.history_user_texts),
+                prev_assistant_text=context.prev_assistant_text,
+                prev_assistant_usage=context.prev_assistant_usage,
+                prev_route_decisions=list(context.prev_route_decisions),
+                flags_text_override=None,
+                context_metadata={
+                    "turn_index": context.turn_index,
+                    "context_tokens_est": max(1, context.context_tokens_est),
+                    "n_tools": context.n_tools,
+                    "tool_result_length": context.tool_result_length,
+                    "has_code_block": context.has_code_block,
+                    "has_prev_assistant": context.has_prev_assistant,
+                },
+            )
+
         return request_type(
             current_user_text=task_description,
             history_user_texts=[],

@@ -1,0 +1,2401 @@
+#!/usr/bin/env python3
+"""Generate 60 holdout cases YAML with real, unique content."""
+
+import yaml
+from pathlib import Path
+
+cases = []
+
+# ── DOC_UNDERSTANDING (8) ──────────────────────────────────
+
+cases.append({
+    "id": "GT-DOC-001",
+    "domain": "GENERAL",
+    "category": "DOC_UNDERSTANDING",
+    "task_type": "ANALYSIS_ONLY",
+    "complexity": "SIMPLE",
+    "risk_level": "LOW",
+    "prompt": "请总结这份用户协议的核心条款，列出用户的主要权利和义务。",
+    "input_context": """用户服务协议 v2.1
+
+第一条 服务内容
+本平台提供 AI 模型路由服务，根据用户任务自动选择最优模型。
+
+第二条 用户权利
+1. 用户有权获得准确的路由决策说明
+2. 用户有权查看模型调用成本明细
+3. 用户有权导出历史使用数据
+
+第三条 用户义务
+1. 用户不得上传恶意代码或攻击性内容
+2. 用户应确保任务描述准确完整
+3. 用户应按时支付服务费用
+
+第四条 免责条款
+本平台不对模型输出内容的准确性承担责任。""",
+    "routing_metadata": {"history_messages": [], "n_tools": 0, "tool_result_length": 0},
+    "expected_behavior": ["识别用户权利3条", "识别用户义务3条", "提到免责条款"],
+    "forbidden_behavior": ["添加协议中不存在的条款", "曲解条款含义"],
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["用户权利", "用户义务", "免责条款"],
+        "forbidden_findings": ["付费义务", "法律责任"],
+        "required_outputs": ["总结"],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "expected_fact_ids": ["rights_3", "obligations_3", "disclaimer"],
+        "allowed_claims": ["用户有3项权利", "用户有3项义务", "平台不保证准确性"],
+    },
+})
+
+cases.append({
+    "id": "GT-DOC-002",
+    "domain": "GENERAL",
+    "category": "DOC_UNDERSTANDING",
+    "task_type": "ANALYSIS_ONLY",
+    "complexity": "MODERATE",
+    "risk_level": "MEDIUM",
+    "prompt": "分析这份隐私政策中关于数据收集的条款，列出收集了哪些类型的个人信息以及各自的用途。",
+    "input_context": """隐私政策（节选）
+
+2.1 我们收集以下个人信息：
+(a) 账户注册信息：姓名、邮箱地址、手机号码，用于创建和管理用户账户。
+(b) 使用数据：访问日志、点击流数据、页面停留时间，用于改善产品体验。
+(c) 设备信息：设备型号、操作系统版本、唯一设备标识符，用于安全验证和反欺诈。
+(d) 位置信息：经用户授权后收集精确地理位置，用于提供基于位置的服务推荐。
+
+2.2 数据保留期限：
+账户注册信息在账户注销后保留30天；使用数据保留180天；设备信息保留90天。
+
+2.3 第三方共享：
+未经用户明确同意，不会将个人信息共享给第三方，法律法规要求的除外。""",
+    "routing_metadata": {"history_messages": [], "n_tools": 0, "tool_result_length": 0},
+    "expected_behavior": ["识别4类个人信息", "列出每类信息的用途", "提到保留期限"],
+    "forbidden_behavior": ["声称数据会永久保留", "编造未提及的数据类型"],
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["账户注册信息", "使用数据", "设备信息", "位置信息"],
+        "required_outputs": ["数据类型", "用途"],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "expected_fact_ids": ["data_types_4", "retention_periods", "no_third_party"],
+        "allowed_claims": [
+            "收集4类个人信息",
+            "账户信息用于账户管理",
+            "使用数据用于改善产品",
+            "设备信息用于安全验证",
+            "位置信息需用户授权",
+        ],
+    },
+})
+
+cases.append({
+    "id": "GT-DOC-003",
+    "domain": "GENERAL",
+    "category": "DOC_UNDERSTANDING",
+    "task_type": "ANALYSIS_ONLY",
+    "complexity": "MODERATE",
+    "risk_level": "LOW",
+    "prompt": "阅读这份技术方案文档，总结其核心设计思想、技术选型理由、以及潜在的风险点。",
+    "input_context": """RFC-2024-03: 消息队列迁移方案
+
+## 背景
+当前系统使用 RabbitMQ 作为消息中间件，日均消息量已达 5000 万条。
+近期出现消息堆积和消费者延迟问题，高峰期 P99 延迟超过 5 秒。
+
+## 方案
+迁移至 Apache Kafka，采用 3 节点集群部署。
+
+### 技术选型理由
+1. Kafka 的顺序写磁盘机制可支撑百万级 TPS
+2. 分区机制支持水平扩展消费者组
+3. 副本机制保证数据不丢失
+
+### 迁移策略
+采用双写过渡：生产者同时写入 RabbitMQ 和 Kafka，消费者逐步切换到 Kafka。
+过渡期预计 4 周。
+
+### 风险
+1. 双写期间消息可能重复，需要消费端做幂等处理
+2. Kafka 运维复杂度高于 RabbitMQ，需要额外培训
+3. 网络分区时副本同步可能延迟""",
+    "routing_metadata": {"history_messages": [], "n_tools": 0, "tool_result_length": 0},
+    "expected_behavior": [
+        "总结从 RabbitMQ 迁移到 Kafka 的核心思想",
+        "列出 3 个技术选型理由",
+        "识别 3 个风险点",
+    ],
+    "forbidden_behavior": ["建议不迁移", "编造文档未提及的技术方案"],
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["RabbitMQ", "Kafka", "双写过渡", "幂等处理"],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "expected_fact_ids": ["migration_target", "3_reasons", "3_risks"],
+        "allowed_claims": [
+            "从 RabbitMQ 迁移到 Kafka",
+            "日均消息量 5000 万条",
+            "采用双写过渡策略",
+            "过渡期 4 周",
+        ],
+    },
+})
+
+cases.append({
+    "id": "GT-DOC-004",
+    "domain": "GENERAL",
+    "category": "DOC_UNDERSTANDING",
+    "task_type": "ANALYSIS_ONLY",
+    "complexity": "MODERATE",
+    "risk_level": "MEDIUM",
+    "prompt": "分析这份保险条款，列出理赔的条件、免赔额、以及除外责任。如果条款有模糊之处请指出。",
+    "input_context": """机动车辆保险条款（商业险部分）
+
+第三章 保险责任
+第十八条 保险期间内，被保险人或其允许的合法驾驶人在使用被保险机动车过程中，
+因下列原因造成被保险机动车的直接损失，保险人依照本保险合同的约定负责赔偿：
+（一）碰撞、倾覆、坠落；
+（二）火灾、爆炸；
+（三）外界物体坠落、倒塌。
+
+第十九条 每次事故免赔额为损失金额的 10% 或人民币 500 元，以高者为准。
+
+第四章 责任免除
+第二十一条 下列情况下，不论任何原因造成被保险机动车损失，保险人均不负责赔偿：
+（一）地震及其次生灾害；
+（二）战争、军事冲突、恐怖活动、暴乱；
+（三）被保险机动车被盗窃、抢劫、抢夺期间造成的损坏；
+（四）驾驶人饮酒、吸食或注射毒品后驾车的。
+
+第二十二条 下列损失和费用，保险人不负责赔偿：
+（一）自然磨损、朽坏、腐蚀、故障；
+（二）车轮单独损坏、玻璃单独破碎、无明显碰撞痕迹的车身划痕；
+（三）人工直接供油、高温烘烤、自燃、不明原因火灾。""",
+    "routing_metadata": {"history_messages": [], "n_tools": 0, "tool_result_length": 0},
+    "expected_behavior": [
+        "列出 3 类保险责任",
+        "说明免赔额计算方式",
+        "列出除外责任",
+    ],
+    "forbidden_behavior": ["声称全险无免赔", "添加条款中不存在的保障范围"],
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["碰撞", "火灾", "免赔额", "地震免除", "饮酒免除"],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "expected_fact_ids": ["3_coverages", "deductible_rule", "exclusions"],
+        "allowed_claims": [
+            "碰撞、倾覆、坠落属于保险责任",
+            "免赔额为损失10%或500元取高",
+            "地震属于除外责任",
+            "饮酒驾车属于除外责任",
+        ],
+    },
+})
+
+cases.append({
+    "id": "GT-DOC-005",
+    "domain": "GENERAL",
+    "category": "DOC_UNDERSTANDING",
+    "task_type": "ANALYSIS_ONLY",
+    "complexity": "SIMPLE",
+    "risk_level": "LOW",
+    "prompt": "总结这份员工手册中关于休假制度的规定，包括各类假期天数和请假流程。",
+    "input_context": """员工手册 第七章 考勤与休假
+
+7.1 年假
+入职满1年不满10年的员工，年休假5天；满10年不满20年的，年休假10天；满20年的，年休假15天。
+
+7.2 病假
+员工因病或非因工负伤需要休息的，凭二级以上医院证明可申请病假。
+病假期间工资按基本工资的 80% 发放，全年累计不超过 60 天。
+
+7.3 婚假
+符合法定结婚年龄的员工，可享受婚假 3 天。晚婚（男25岁、女23岁以上初婚）另加 7 天。
+
+7.4 产假
+女员工产假 98 天，其中产前可休假 15 天。难产增加 15 天。多胞胎每多一个增加 15 天。
+男员工陪产假 15 天。
+
+7.5 请假流程
+1天以内由直属主管审批；1-3天需部门经理审批；3天以上需人力资源部审批。
+所有请假需提前在 OA 系统提交申请。""",
+    "routing_metadata": {"history_messages": [], "n_tools": 0, "tool_result_length": 0},
+    "expected_behavior": [
+        "列出年假、病假、婚假、产假的天数规定",
+        "说明请假审批层级",
+    ],
+    "forbidden_behavior": ["编造不存在的假期类型", "错误报告天数"],
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["年假", "病假", "婚假", "产假", "审批流程"],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "expected_fact_ids": ["annual_leave_tiers", "sick_leave", "marriage_leave", "maternity_leave"],
+        "allowed_claims": [
+            "年假5-15天按工龄分级",
+            "病假工资80%",
+            "婚假3天晚婚加7天",
+            "产假98天",
+        ],
+    },
+})
+
+cases.append({
+    "id": "GT-DOC-006",
+    "domain": "GENERAL",
+    "category": "DOC_UNDERSTANDING",
+    "task_type": "ANALYSIS_ONLY",
+    "complexity": "MODERATE",
+    "risk_level": "LOW",
+    "prompt": "阅读这份 API 文档，总结认证方式、请求频率限制、以及错误码含义。",
+    "input_context": """AI Router API v2 接口文档
+
+## 认证
+所有请求须在 Header 中携带 API Key：
+Authorization: Bearer <your-api-key>
+
+API Key 可在控制台 > 设置 > API 密钥 中生成，每个项目最多 5 个 Key。
+
+## 频率限制
+免费版：60 次/分钟，1000 次/天
+专业版：600 次/分钟，50000 次/天
+企业版：自定义，联系销售
+
+超出限制时返回 HTTP 429，响应体包含 Retry-After 头指示等待秒数。
+
+## 错误码
+400: 请求参数错误，检查 JSON 格式和必填字段
+401: API Key 无效或已过期
+403: 无权访问目标资源
+404: 请求的模型或路由不存在
+429: 超出频率限制
+500: 服务端内部错误，请稍后重试
+503: 目标模型服务暂不可用""",
+    "routing_metadata": {"history_messages": [], "n_tools": 0, "tool_result_length": 0},
+    "expected_behavior": [
+        "说明 Bearer Token 认证方式",
+        "列出三个版本的频率限制",
+        "列出主要错误码及其含义",
+    ],
+    "forbidden_behavior": ["编造不存在的认证方式", "错误报告限制数值"],
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["Bearer", "频率限制", "429", "错误码"],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "expected_fact_ids": ["bearer_auth", "rate_limits_3tiers", "error_codes"],
+        "allowed_claims": [
+            "使用 Bearer Token 认证",
+            "免费版 60次/分钟",
+            "429 表示超出频率限制",
+            "401 表示 Key 无效",
+        ],
+    },
+})
+
+cases.append({
+    "id": "GT-DOC-007",
+    "domain": "GENERAL",
+    "category": "DOC_UNDERSTANDING",
+    "task_type": "ANALYSIS_ONLY",
+    "complexity": "MODERATE",
+    "risk_level": "LOW",
+    "prompt": "阅读这篇论文摘要，总结研究方法、实验设置、主要结论和局限性。",
+    "input_context": """论文摘要：基于强化学习的 LLM 路由优化
+
+摘要：大语言模型（LLM）路由旨在为不同任务选择最优模型，以平衡质量与成本。
+本文提出 RL-Router，一种基于 PPO 算法的路由策略。我们在 5 个候选模型
+（GPT-4, Claude-3, Qwen-72B, Llama-70B, Mixtral-8x7B）上进行训练，
+使用 MMLU、HumanEval 和 GSM8K 三个基准数据集共 3000 条评测样本。
+
+方法：将路由建模为马尔可夫决策过程，状态空间包含任务文本嵌入和上下文特征，
+动作空间为 5 个候选模型。奖励函数 = 质量得分 - λ × 归一化成本，λ=0.3。
+使用 PPO 训练 100K 步，mini-batch size=64。
+
+结果：相比 cost-weighted baseline，RL-Router 在质量保持 95% 的前提下，
+平均成本降低 38%。在 HumanEval 上改善最显著（成本降低 52%），
+GSM8K 上改善最小（成本降低 18%）。
+
+局限：训练数据仅覆盖 3 个基准，实际生产任务分布可能不同；
+未考虑模型间的推理延迟差异；PPO 超参数未经充分调优。""",
+    "routing_metadata": {"history_messages": [], "n_tools": 0, "tool_result_length": 0},
+    "expected_behavior": [
+        "总结 RL-Router 方法（PPO 强化学习）",
+        "描述实验设置（5模型 × 3基准）",
+        "报告主要结论（成本降低38%）",
+        "列出局限性",
+    ],
+    "forbidden_behavior": ["声称方法优于 GPT-4", "编造未提及的实验结果"],
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["PPO", "5个候选模型", "3个基准", "成本降低38%"],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "expected_fact_ids": ["method_ppo", "5_models", "3_benchmarks", "38pct_cost_reduction"],
+        "allowed_claims": [
+            "使用 PPO 算法",
+            "5 个候选模型",
+            "3000 条评测样本",
+            "平均成本降低 38%",
+            "HumanEval 成本降低 52%",
+        ],
+    },
+})
+
+cases.append({
+    "id": "GT-DOC-008",
+    "domain": "GENERAL",
+    "category": "DOC_UNDERSTANDING",
+    "task_type": "ANALYSIS_ONLY",
+    "complexity": "SIMPLE",
+    "risk_level": "LOW",
+    "prompt": "分析这份租房合同中的关键条款：租期、租金、押金、以及退租条件。",
+    "input_context": """房屋租赁合同
+
+甲方（出租方）：张明
+乙方（承租方）：李华
+
+一、房屋地址：北京市朝阳区建国路88号SOHO现代城A座1205室
+二、租赁期限：2024年3月1日至2025年2月28日，共12个月。
+三、月租金：人民币8500元，每月1日前支付至甲方指定银行账户。
+四、押金：人民币17000元（两个月租金），合同期满且房屋验收合格后7个工作日内无息退还。
+五、提前退租：乙方如需提前退租，须提前30天书面通知甲方，并支付剩余租期1个月租金作为违约金。
+六、房屋维护：日常维护费用由乙方承担，结构性维修由甲方负责。
+七、禁止条款：乙方不得将房屋转租、不得用于商业经营、不得饲养宠物。""",
+    "routing_metadata": {"history_messages": [], "n_tools": 0, "tool_result_length": 0},
+    "expected_behavior": [
+        "识别租期12个月",
+        "月租金8500元",
+        "押金17000元",
+        "提前退租需30天通知+1个月违约金",
+    ],
+    "forbidden_behavior": ["声称可以转租", "编造不存在的条款"],
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["租期", "月租金", "押金", "提前退租"],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "expected_values": {"monthly_rent": 8500, "deposit": 17000, "lease_months": 12},
+        "expected_fact_ids": ["lease_term", "rent", "deposit", "early_termination"],
+        "allowed_claims": [
+            "租期12个月",
+            "月租金8500元",
+            "押金17000元等于两个月租金",
+            "提前退租需30天通知",
+        ],
+    },
+})
+
+# ── TABLE_DATA (8) ────────────────────────────────────────
+
+cases.append({
+    "id": "GT-TBL-001",
+    "domain": "GENERAL",
+    "category": "TABLE_DATA",
+    "task_type": "ANALYSIS_ONLY",
+    "complexity": "SIMPLE",
+    "risk_level": "LOW",
+    "prompt": "计算每个产品的总销售额和平均单价，找出销售额最高的产品。",
+    "input_context": """产品销售数据：
+产品A: 单价55元，销量10件
+产品B: 单价65元，销量10件
+产品C: 单价120元，销量10件
+产品D: 单价100元，销量10件""",
+    "routing_metadata": {"history_messages": [], "n_tools": 0, "tool_result_length": 0},
+    "expected_behavior": ["计算各产品销售额", "计算总销售额3400", "识别产品C最高"],
+    "forbidden_behavior": ["计算错误的总额"],
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["总销售额", "产品C"],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "expected_values": {
+            "total_sales": 3400.0,
+            "product_a_sales": 550.0,
+            "product_b_sales": 650.0,
+            "product_c_sales": 1200.0,
+            "product_d_sales": 1000.0,
+            "highest_product": "C",
+        },
+    },
+})
+
+cases.append({
+    "id": "GT-TBL-002",
+    "domain": "GENERAL",
+    "category": "TABLE_DATA",
+    "task_type": "ANALYSIS_ONLY",
+    "complexity": "MODERATE",
+    "risk_level": "LOW",
+    "prompt": "根据员工薪资表，计算各部门的平均薪资、最高薪资和最低薪资，并找出平均薪资最高的部门。",
+    "input_context": """员工薪资表：
+张三, 技术部, 25000
+李四, 技术部, 32000
+王五, 技术部, 28000
+赵六, 市场部, 18000
+钱七, 市场部, 22000
+孙八, 市场部, 15000
+周九, 财务部, 20000
+吴十, 财务部, 26000
+郑十一, 财务部, 23000
+王十二, 技术部, 35000""",
+    "routing_metadata": {"history_messages": [], "n_tools": 0, "tool_result_length": 0},
+    "expected_behavior": [
+        "计算技术部平均30000",
+        "计算市场部平均18333",
+        "计算财务部平均23000",
+        "识别技术部平均最高",
+    ],
+    "forbidden_behavior": ["计算错误的平均值"],
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["技术部平均", "市场部平均", "财务部平均"],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "expected_values": {
+            "tech_avg": 30000.0,
+            "marketing_avg": 18333.33,
+            "finance_avg": 23000.0,
+            "tech_max": 35000,
+            "tech_min": 25000,
+            "highest_avg_dept": "技术部",
+        },
+    },
+})
+
+cases.append({
+    "id": "GT-TBL-003",
+    "domain": "GENERAL",
+    "category": "TABLE_DATA",
+    "task_type": "ANALYSIS_ONLY",
+    "complexity": "SIMPLE",
+    "risk_level": "LOW",
+    "prompt": "分析库存数据，找出库存不足（低于安全库存）的产品，并计算需要补货的数量。",
+    "input_context": """产品库存数据（当前库存 / 安全库存）：
+手机壳A: 120 / 200
+手机壳B: 350 / 200
+充电器C: 45 / 100
+数据线D: 80 / 150
+耳机E: 500 / 300
+贴膜F: 30 / 80""",
+    "routing_metadata": {"history_messages": [], "n_tools": 0, "tool_result_length": 0},
+    "expected_behavior": [
+        "识别手机壳A不足（差80）",
+        "识别充电器C不足（差55）",
+        "识别数据线D不足（差70）",
+        "识别贴膜F不足（差50）",
+    ],
+    "forbidden_behavior": ["误判库存充足的产品"],
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["手机壳A", "充电器C", "数据线D", "贴膜F"],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "expected_values": {
+            "below_safety_count": 4,
+            "phone_case_a_shortage": 80,
+            "charger_c_shortage": 55,
+            "cable_d_shortage": 70,
+            "film_f_shortage": 50,
+        },
+    },
+})
+
+cases.append({
+    "id": "GT-TBL-004",
+    "domain": "GENERAL",
+    "category": "TABLE_DATA",
+    "task_type": "ANALYSIS_ONLY",
+    "complexity": "MODERATE",
+    "risk_level": "LOW",
+    "prompt": "根据学生成绩表计算每位学生的加权平均分（数学权重0.4、英语0.3、物理0.3），找出加权平均分最高的学生。",
+    "input_context": """学生成绩（数学/英语/物理）：
+陈一: 92/78/85
+刘二: 88/95/72
+张三: 76/82/90
+李四: 95/70/88
+王五: 80/88/76""",
+    "routing_metadata": {"history_messages": [], "n_tools": 0, "tool_result_length": 0},
+    "expected_behavior": [
+        "计算陈一加权平均: 92×0.4+78×0.3+85×0.3=85.7",
+        "计算李四加权平均: 95×0.4+70×0.3+88×0.3=85.4",
+        "识别陈一最高",
+    ],
+    "forbidden_behavior": ["使用简单平均代替加权平均"],
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["加权平均", "陈一"],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "expected_values": {
+            "chen_yi_weighted": 85.7,
+            "liu_er_weighted": 85.3,
+            "zhang_san_weighted": 82.0,
+            "li_si_weighted": 85.4,
+            "wang_wu_weighted": 81.2,
+            "highest_student": "陈一",
+        },
+    },
+})
+
+cases.append({
+    "id": "GT-TBL-005",
+    "domain": "GENERAL",
+    "category": "TABLE_DATA",
+    "task_type": "ANALYSIS_ONLY",
+    "complexity": "SIMPLE",
+    "risk_level": "LOW",
+    "prompt": "汇总这份月度费用报告，计算各类别总支出和总支出金额，找出超预算的类别。",
+    "input_context": """2024年3月部门费用（实际支出/预算）：
+办公用品: 2300/3000
+差旅费: 18500/15000
+培训费: 8000/10000
+团建活动: 5200/5000
+软件许可: 12000/12000
+设备采购: 25000/20000""",
+    "routing_metadata": {"history_messages": [], "n_tools": 0, "tool_result_length": 0},
+    "expected_behavior": [
+        "计算总支出71000",
+        "识别差旅费超预算3500",
+        "识别团建超预算200",
+        "识别设备采购超预算5000",
+    ],
+    "forbidden_behavior": ["遗漏超预算类别", "计算错误的总额"],
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["总支出", "差旅费", "团建", "设备采购"],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "expected_values": {
+            "total_expense": 71000,
+            "total_budget": 65000,
+            "over_budget_count": 3,
+            "travel_overage": 3500,
+            "teambuilding_overage": 200,
+            "equipment_overage": 5000,
+        },
+    },
+})
+
+cases.append({
+    "id": "GT-TBL-006",
+    "domain": "GENERAL",
+    "category": "TABLE_DATA",
+    "task_type": "ANALYSIS_ONLY",
+    "complexity": "MODERATE",
+    "risk_level": "LOW",
+    "prompt": "分析网站流量数据，计算每个渠道的转化率（注册数/访问数），找出转化率最高和最低的渠道。",
+    "input_context": """渠道流量数据（访问数/注册数）：
+百度SEM: 12000/360
+微信公众号: 8500/680
+抖音广告: 25000/500
+自然搜索: 6000/420
+知乎推荐: 3200/288
+小红书: 9800/392""",
+    "routing_metadata": {"history_messages": [], "n_tools": 0, "tool_result_length": 0},
+    "expected_behavior": [
+        "计算各渠道转化率",
+        "识别微信公众号最高8.0%",
+        "识别抖音广告最低2.0%",
+    ],
+    "forbidden_behavior": ["计算错误的转化率"],
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["转化率", "微信", "抖音"],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "expected_values": {
+            "baidu_rate": 3.0,
+            "wechat_rate": 8.0,
+            "douyin_rate": 2.0,
+            "organic_rate": 7.0,
+            "zhihu_rate": 9.0,
+            "xiaohongshu_rate": 4.0,
+            "highest_channel": "知乎推荐",
+            "lowest_channel": "抖音广告",
+        },
+    },
+})
+
+cases.append({
+    "id": "GT-TBL-007",
+    "domain": "GENERAL",
+    "category": "TABLE_DATA",
+    "task_type": "ANALYSIS_ONLY",
+    "complexity": "MODERATE",
+    "risk_level": "LOW",
+    "prompt": "根据服务器监控数据，计算每台服务器的平均CPU使用率，找出负载最高和最低的服务器，标记CPU超过80%的告警服务器。",
+    "input_context": """服务器CPU使用率采样（4次采样，单位%）：
+server-01: 45, 52, 48, 55
+server-02: 82, 88, 91, 85
+server-03: 30, 28, 35, 27
+server-04: 72, 68, 75, 85
+server-05: 92, 89, 95, 88
+server-06: 15, 20, 18, 17""",
+    "routing_metadata": {"history_messages": [], "n_tools": 0, "tool_result_length": 0},
+    "expected_behavior": [
+        "计算各服务器平均值",
+        "识别server-05负载最高91%",
+        "识别server-06负载最低17.5%",
+        "标记server-02和server-05超过80%",
+    ],
+    "forbidden_behavior": ["计算错误的平均值"],
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["server-05", "server-06", "80%", "告警"],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "expected_values": {
+            "server01_avg": 50.0,
+            "server02_avg": 86.5,
+            "server03_avg": 30.0,
+            "server04_avg": 75.0,
+            "server05_avg": 91.0,
+            "server06_avg": 17.5,
+            "highest": "server-05",
+            "lowest": "server-06",
+            "alert_servers": ["server-02", "server-05"],
+        },
+    },
+})
+
+cases.append({
+    "id": "GT-TBL-008",
+    "domain": "GENERAL",
+    "category": "TABLE_DATA",
+    "task_type": "ANALYSIS_ONLY",
+    "complexity": "MODERATE",
+    "risk_level": "LOW",
+    "prompt": "分析季度销售趋势数据，计算环比增长率，找出增长最快和下降的季度。",
+    "input_context": """季度销售额（万元）：
+2023Q1: 450
+2023Q2: 520
+2023Q3: 480
+2023Q4: 610
+2024Q1: 580
+2024Q2: 690""",
+    "routing_metadata": {"history_messages": [], "n_tools": 0, "tool_result_length": 0},
+    "expected_behavior": [
+        "计算Q2环比增长15.6%",
+        "计算Q3环比下降7.7%",
+        "识别2024Q2环比增长最快19.0%",
+        "识别2023Q3环比下降",
+    ],
+    "forbidden_behavior": ["计算错误的增长率"],
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["环比增长", "2023Q3下降", "2024Q2"],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "expected_values": {
+            "q2_2023_qoq": 15.56,
+            "q3_2023_qoq": -7.69,
+            "q4_2023_qoq": 27.08,
+            "q1_2024_qoq": -4.92,
+            "q2_2024_qoq": 18.97,
+            "fastest_growth": "2023Q4",
+            "decline_quarters": ["2023Q3", "2024Q1"],
+        },
+    },
+})
+
+# ── CODE_DEBUG (8) ────────────────────────────────────────
+
+cases.append({
+    "id": "GT-DBG-001",
+    "domain": "GENERAL",
+    "category": "CODE_DEBUG",
+    "task_type": "CODE_CHANGE",
+    "complexity": "MODERATE",
+    "risk_level": "LOW",
+    "prompt": "binary_search 函数有 off-by-one 错误，请找出并修复。",
+    "input_context": "文件 utils.py 中的 binary_search 函数在搜索最后一个元素时返回错误结果。",
+    "workspace_files": {
+        "utils.py": '''def binary_search(arr, target):
+    """在升序数组中二分查找目标值，返回索引，未找到返回-1。"""
+    left, right = 0, len(arr) - 1
+    while left < right:
+        mid = (left + right) // 2
+        if arr[mid] == target:
+            return mid
+        elif arr[mid] < target:
+            left = mid + 1
+        else:
+            right = mid - 1
+    return -1
+'''
+    },
+    "harness_validation": {
+        "commands": ["python -m pytest test_utils.py -q"],
+        "timeout_s": 10,
+        "expected_exit_code": 0,
+    },
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["off-by-one", "left < right", "left <= right"],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "test_files": [
+            {
+                "filename": "test_utils.py",
+                "content": '''from utils import binary_search
+
+def test_found_middle():
+    assert binary_search([1, 2, 3, 4, 5], 3) == 2
+
+def test_found_first():
+    assert binary_search([1, 2, 3, 4, 5], 1) == 0
+
+def test_found_last():
+    assert binary_search([1, 2, 3, 4, 5], 5) == 4
+
+def test_not_found():
+    assert binary_search([1, 2, 3, 4, 5], 6) == -1
+
+def test_single_element_found():
+    assert binary_search([42], 42) == 0
+
+def test_single_element_not_found():
+    assert binary_search([42], 7) == -1
+
+def test_empty():
+    assert binary_search([], 1) == -1
+''',
+            }
+        ],
+        "allowed_root_causes": ["while left < right 应为 left <= right，否则最后一个元素不会被检查"],
+    },
+})
+
+cases.append({
+    "id": "GT-DBG-002",
+    "domain": "GENERAL",
+    "category": "CODE_DEBUG",
+    "task_type": "CODE_CHANGE",
+    "complexity": "MODERATE",
+    "risk_level": "LOW",
+    "prompt": "find_max 函数在输入包含 None 时崩溃，请添加防御性处理。",
+    "input_context": "数据统计模块在接收到包含 None 的列表时抛出 TypeError。",
+    "workspace_files": {
+        "stats.py": '''def find_max(numbers):
+    """返回列表中的最大值，忽略 None 值。如果列表为空或全是 None 则返回 None。"""
+    if not numbers:
+        return None
+    max_val = numbers[0]
+    for num in numbers[1:]:
+        if num > max_val:
+            max_val = num
+    return max_val
+'''
+    },
+    "harness_validation": {
+        "commands": ["python -m pytest test_stats.py -q"],
+        "timeout_s": 10,
+        "expected_exit_code": 0,
+    },
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["None", "TypeError", "过滤"],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "test_files": [
+            {
+                "filename": "test_stats.py",
+                "content": '''from stats import find_max
+
+def test_normal():
+    assert find_max([3, 1, 4, 1, 5]) == 5
+
+def test_with_none():
+    assert find_max([3, None, 4, None, 5]) == 5
+
+def test_all_none():
+    assert find_max([None, None, None]) is None
+
+def test_empty():
+    assert find_max([]) is None
+
+def test_single_none():
+    assert find_max([None]) is None
+
+def test_negative_with_none():
+    assert find_max([-3, None, -1, None]) == -1
+''',
+            }
+        ],
+        "allowed_root_causes": ["未过滤 None 值，导致 None > int 比较抛出 TypeError"],
+    },
+})
+
+cases.append({
+    "id": "GT-DBG-003",
+    "domain": "GENERAL",
+    "category": "CODE_DEBUG",
+    "task_type": "CODE_CHANGE",
+    "complexity": "SIMPLE",
+    "risk_level": "LOW",
+    "prompt": "format_name 函数在处理空字符串时行为不正确，请修复。",
+    "input_context": "用户注册模块在姓或名为空时生成了格式错误的显示名。",
+    "workspace_files": {
+        "formatter.py": '''def format_name(first_name, last_name):
+    """格式化姓名显示：'姓, 名'。如果名缺失则只显示姓。"""
+    return f"{last_name}, {first_name}"
+'''
+    },
+    "harness_validation": {
+        "commands": ["python -m pytest test_formatter.py -q"],
+        "timeout_s": 10,
+        "expected_exit_code": 0,
+    },
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["空字符串", "条件检查"],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "test_files": [
+            {
+                "filename": "test_formatter.py",
+                "content": '''from formatter import format_name
+
+def test_full_name():
+    assert format_name("明", "张") == "张, 明"
+
+def test_empty_first():
+    result = format_name("", "张")
+    assert result == "张"
+
+def test_empty_last():
+    result = format_name("明", "")
+    assert result == "明"
+
+def test_both_empty():
+    result = format_name("", "")
+    assert result == ""
+
+def test_normal_english():
+    assert format_name("John", "Smith") == "Smith, John"
+''',
+            }
+        ],
+        "allowed_root_causes": ["未检查空字符串，直接拼接导致输出 ', ' 或 '张, '"],
+    },
+})
+
+cases.append({
+    "id": "GT-DBG-004",
+    "domain": "GENERAL",
+    "category": "CODE_DEBUG",
+    "task_type": "CODE_CHANGE",
+    "complexity": "MODERATE",
+    "risk_level": "LOW",
+    "prompt": "flatten 函数在处理嵌套列表时出现无限递归，请修复。",
+    "input_context": "数据解析模块在处理多层嵌套列表时栈溢出。",
+    "workspace_files": {
+        "nested.py": '''def flatten(nested_list):
+    """将任意深度的嵌套列表展平为一维列表。"""
+    result = []
+    for item in nested_list:
+        if isinstance(item, list):
+            result.extend(flatten(item))
+        else:
+            result.append(item)
+    return result
+
+
+def flatten_with_depth(nested_list, max_depth=None):
+    """展平嵌套列表，可指定最大深度。"""
+    result = []
+    for item in nested_list:
+        if isinstance(item, list):
+            result.extend(flatten_with_depth(item, max_depth))
+        else:
+            result.append(item)
+    return result
+'''
+    },
+    "harness_validation": {
+        "commands": ["python -m pytest test_nested.py -q"],
+        "timeout_s": 10,
+        "expected_exit_code": 0,
+    },
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["max_depth", "递归深度", "递减"],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "test_files": [
+            {
+                "filename": "test_nested.py",
+                "content": '''from nested import flatten, flatten_with_depth
+
+def test_flat():
+    assert flatten([1, 2, 3]) == [1, 2, 3]
+
+def test_nested():
+    assert flatten([1, [2, [3, 4]], 5]) == [1, 2, 3, 4, 5]
+
+def test_empty():
+    assert flatten([]) == []
+
+def test_deep_nested():
+    assert flatten([[[1]], [[2]], [[3]]]) == [1, 2, 3]
+
+def test_with_depth_zero():
+    assert flatten_with_depth([1, [2, 3]], max_depth=0) == [1, [2, 3]]
+
+def test_with_depth_one():
+    assert flatten_with_depth([1, [2, [3]]], max_depth=1) == [1, 2, [3]]
+
+def test_with_depth_none():
+    assert flatten_with_depth([1, [2, [3]]]) == [1, 2, 3]
+''',
+            }
+        ],
+        "allowed_root_causes": ["flatten_with_depth 未递减 max_depth，导致 max_depth 始终非零，无限递归"],
+    },
+})
+
+cases.append({
+    "id": "GT-DBG-005",
+    "domain": "GENERAL",
+    "category": "CODE_DEBUG",
+    "task_type": "CODE_CHANGE",
+    "complexity": "MODERATE",
+    "risk_level": "MEDIUM",
+    "prompt": "Counter 类在多线程环境下计数不准确，请添加线程安全保护。",
+    "input_context": "日志统计模块在高并发场景下计数丢失。",
+    "workspace_files": {
+        "counter.py": '''class Counter:
+    """线程安全的计数器。"""
+
+    def __init__(self):
+        self._count = 0
+
+    def increment(self):
+        current = self._count
+        self._count = current + 1
+
+    def decrement(self):
+        current = self._count
+        self._count = current - 1
+
+    def get_count(self):
+        return self._count
+'''
+    },
+    "harness_validation": {
+        "commands": ["python -m pytest test_counter.py -q"],
+        "timeout_s": 15,
+        "expected_exit_code": 0,
+    },
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["Lock", "threading", "线程安全"],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "test_files": [
+            {
+                "filename": "test_counter.py",
+                "content": '''import threading
+from counter import Counter
+
+def test_single_thread():
+    c = Counter()
+    for _ in range(1000):
+        c.increment()
+    assert c.get_count() == 1000
+
+def test_multi_thread():
+    c = Counter()
+    threads = []
+    for _ in range(10):
+        t = threading.Thread(target=lambda: [c.increment() for _ in range(1000)])
+        threads.append(t)
+        t.start()
+    for t in threads:
+        t.join()
+    assert c.get_count() == 10000
+
+def test_increment_decrement():
+    c = Counter()
+    for _ in range(500):
+        c.increment()
+    for _ in range(200):
+        c.decrement()
+    assert c.get_count() == 300
+''',
+            }
+        ],
+        "allowed_root_causes": ["increment/decrement 中先读后写非原子操作，多线程下存在竞态条件"],
+    },
+})
+
+cases.append({
+    "id": "GT-DBG-006",
+    "domain": "GENERAL",
+    "category": "CODE_DEBUG",
+    "task_type": "CODE_CHANGE",
+    "complexity": "SIMPLE",
+    "risk_level": "LOW",
+    "prompt": "parse_config 函数在文件不存在时应该返回默认配置而不是崩溃，请修复异常处理。",
+    "input_context": "配置文件加载模块在首次运行（无配置文件）时抛出 FileNotFoundError。",
+    "workspace_files": {
+        "config_loader.py": '''import json
+
+DEFAULT_CONFIG = {
+    "timeout": 30,
+    "retries": 3,
+    "log_level": "INFO",
+}
+
+def parse_config(filepath):
+    """解析 JSON 配置文件，文件不存在时返回默认配置。"""
+    with open(filepath, "r") as f:
+        data = json.load(f)
+    return data
+'''
+    },
+    "harness_validation": {
+        "commands": ["python -m pytest test_config_loader.py -q"],
+        "timeout_s": 10,
+        "expected_exit_code": 0,
+    },
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["FileNotFoundError", "默认配置", "try-except"],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "test_files": [
+            {
+                "filename": "test_config_loader.py",
+                "content": '''import json
+import tempfile
+import os
+from config_loader import parse_config, DEFAULT_CONFIG
+
+def test_valid_config():
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        json.dump({"timeout": 60, "retries": 5}, f)
+        f.flush()
+        result = parse_config(f.name)
+    os.unlink(f.name)
+    assert result["timeout"] == 60
+
+def test_file_not_found():
+    result = parse_config("/nonexistent/path/config.json")
+    assert result == DEFAULT_CONFIG
+
+def test_default_values():
+    result = parse_config("/nonexistent/path/config.json")
+    assert result["timeout"] == 30
+    assert result["retries"] == 3
+    assert result["log_level"] == "INFO"
+''',
+            }
+        ],
+        "allowed_root_causes": ["缺少 try-except FileNotFoundError，文件不存在时直接抛出异常"],
+    },
+})
+
+cases.append({
+    "id": "GT-DBG-007",
+    "domain": "GENERAL",
+    "category": "CODE_DEBUG",
+    "task_type": "CODE_CHANGE",
+    "complexity": "MODERATE",
+    "risk_level": "LOW",
+    "prompt": "add_tag 函数使用了可变默认参数导致多次调用间数据污染，请修复。",
+    "input_context": "标签管理模块在连续添加标签时，后一个对象的标签包含了前一个对象的标签。",
+    "workspace_files": {
+        "tagger.py": '''class Document:
+    """文档对象，支持添加标签。"""
+
+    def __init__(self, title, tags=[]):
+        self.title = title
+        self.tags = tags
+
+    def add_tag(self, tag):
+        self.tags.append(tag)
+
+    def get_tags(self):
+        return list(self.tags)
+'''
+    },
+    "harness_validation": {
+        "commands": ["python -m pytest test_tagger.py -q"],
+        "timeout_s": 10,
+        "expected_exit_code": 0,
+    },
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["可变默认参数", "None", "tags=[]"],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "test_files": [
+            {
+                "filename": "test_tagger.py",
+                "content": '''from tagger import Document
+
+def test_add_tag():
+    doc = Document("test")
+    doc.add_tag("python")
+    assert doc.get_tags() == ["python"]
+
+def test_no_shared_tags():
+    doc1 = Document("doc1")
+    doc1.add_tag("important")
+    doc2 = Document("doc2")
+    assert doc2.get_tags() == []
+
+def test_initial_tags():
+    doc = Document("test", tags=["a", "b"])
+    assert doc.get_tags() == ["a", "b"]
+
+def test_independent_instances():
+    doc1 = Document("doc1")
+    doc1.add_tag("x")
+    doc2 = Document("doc2")
+    doc2.add_tag("y")
+    assert doc1.get_tags() == ["x"]
+    assert doc2.get_tags() == ["y"]
+''',
+            }
+        ],
+        "allowed_root_causes": ["def __init__(self, title, tags=[]) 使用可变默认参数，所有实例共享同一个列表"],
+    },
+})
+
+cases.append({
+    "id": "GT-DBG-008",
+    "domain": "GENERAL",
+    "category": "CODE_DEBUG",
+    "task_type": "CODE_CHANGE",
+    "complexity": "SIMPLE",
+    "risk_level": "LOW",
+    "prompt": "calculate_average 函数使用整数除法导致结果精度丢失，请修复。",
+    "input_context": "报表模块计算平均值时总是返回整数，丢失小数部分。",
+    "workspace_files": {
+        "calculator.py": '''def calculate_average(numbers):
+    """计算数值列表的平均值。空列表返回 0。"""
+    if not numbers:
+        return 0
+    total = sum(numbers)
+    count = len(numbers)
+    return total // count
+'''
+    },
+    "harness_validation": {
+        "commands": ["python -m pytest test_calculator.py -q"],
+        "timeout_s": 10,
+        "expected_exit_code": 0,
+    },
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["整数除法", "//", "/"],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "test_files": [
+            {
+                "filename": "test_calculator.py",
+                "content": '''from calculator import calculate_average
+
+def test_integer_average():
+    assert calculate_average([2, 4, 6]) == 4.0
+
+def test_float_average():
+    result = calculate_average([1, 2, 3])
+    assert abs(result - 2.0) < 0.01
+
+def test_fractional_average():
+    result = calculate_average([1, 2])
+    assert abs(result - 1.5) < 0.01
+
+def test_empty():
+    assert calculate_average([]) == 0
+
+def test_single():
+    assert calculate_average([7]) == 7.0
+
+def test_decimal_precision():
+    result = calculate_average([1, 1, 1, 1, 1, 1, 1, 1, 1, 3])
+    assert abs(result - 1.2) < 0.01
+''',
+            }
+        ],
+        "allowed_root_causes": ["使用 // 整数除法而非 / 浮点除法，导致结果截断为整数"],
+    },
+})
+
+# ── LOG_OPS (8) ───────────────────────────────────────────
+
+cases.append({
+    "id": "GT-LOG-001",
+    "domain": "GENERAL",
+    "category": "LOG_OPS",
+    "task_type": "ANALYSIS_ONLY",
+    "complexity": "MODERATE",
+    "risk_level": "MEDIUM",
+    "prompt": "分析以下服务器日志，确定 OOM 崩溃的根本原因和影响范围。",
+    "input_context": """2024-03-15 14:23:01 INFO [worker-3] Processing batch 1024, heap_used=3.2GB
+2024-03-15 14:23:15 INFO [worker-3] Processing batch 1025, heap_used=3.5GB
+2024-03-15 14:23:28 WARN [worker-3] GC pause 1200ms, heap_used=3.8GB
+2024-03-15 14:23:42 WARN [worker-3] GC pause 2800ms, heap_used=3.9GB
+2024-03-15 14:23:55 ERROR [worker-3] java.lang.OutOfMemoryError: Java heap space
+2024-03-15 14:23:55 ERROR [worker-3] at com.app.batch.DataProcessor.processBatch(DataProcessor.java:142)
+2024-03-15 14:23:55 ERROR [worker-3] at com.app.batch.BatchRunner.run(BatchRunner.java:87)
+2024-03-15 14:23:56 INFO [supervisor] worker-3 terminated with exit code 137
+2024-03-15 14:23:57 INFO [supervisor] Restarting worker-3
+2024-03-15 14:24:10 INFO [worker-3] Started, heap_max=4GB
+2024-03-15 14:24:15 INFO [worker-3] Resuming from batch 1025
+2024-03-15 14:24:30 WARN [worker-3] GC pause 1500ms, heap_used=3.6GB""",
+    "routing_metadata": {"history_messages": [], "n_tools": 0, "tool_result_length": 0},
+    "expected_behavior": [
+        "识别 DataProcessor.processBatch 内存泄漏",
+        "根因是批处理数据未释放导致堆内存持续增长",
+        "影响 worker-3 单节点",
+    ],
+    "forbidden_behavior": ["归因于网络问题", "建议增加 CPU"],
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["OutOfMemoryError", "DataProcessor", "内存泄漏"],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "allowed_root_causes": ["DataProcessor.processBatch 内存泄漏", "堆内存 4GB 不足"],
+        "evidence_line_ids": ["heap_used_3.2GB", "heap_used_3.9GB", "OutOfMemoryError"],
+    },
+})
+
+cases.append({
+    "id": "GT-LOG-002",
+    "domain": "GENERAL",
+    "category": "LOG_OPS",
+    "task_type": "ANALYSIS_ONLY",
+    "complexity": "MODERATE",
+    "risk_level": "MEDIUM",
+    "prompt": "分析数据库连接超时的日志，判断是连接池耗尽还是数据库服务端问题。",
+    "input_context": """2024-03-15 09:15:00 INFO [api-gw] Request POST /api/orders, client=10.0.1.5
+2024-03-15 09:15:05 WARN [db-pool] Connection pool stats: active=20, idle=0, waiting=5
+2024-03-15 09:15:10 WARN [db-pool] Connection pool stats: active=20, idle=0, waiting=12
+2024-03-15 09:15:15 ERROR [api-gw] Timeout waiting for DB connection after 10000ms
+2024-03-15 09:15:15 ERROR [api-gw] Request POST /api/orders failed: ConnectionPoolExhausted
+2024-03-15 09:15:16 INFO [db-monitor] MySQL server status: connections=15/200, queries_per_sec=45
+2024-03-15 09:15:20 WARN [db-pool] Connection held for 45s by thread: order-processor-7
+2024-03-15 09:15:25 WARN [db-pool] Connection held for 42s by thread: order-processor-3
+2024-03-15 09:15:30 INFO [db-pool] Connection pool stats: active=18, idle=2, waiting=0""",
+    "routing_metadata": {"history_messages": [], "n_tools": 0, "tool_result_length": 0},
+    "expected_behavior": [
+        "识别连接池耗尽（active=20, idle=0）",
+        "根因是连接持有时间过长（45s）",
+        "数据库服务端正常（connections=15/200）",
+    ],
+    "forbidden_behavior": ["归因于 MySQL 服务端问题"],
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["连接池耗尽", "连接持有时间长", "数据库服务端正常"],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "allowed_root_causes": ["连接池连接持有时间过长（45秒），导致池耗尽"],
+        "evidence_line_ids": ["active_20_idle_0", "held_45s", "mysql_15_200"],
+    },
+})
+
+cases.append({
+    "id": "GT-LOG-003",
+    "domain": "GENERAL",
+    "category": "LOG_OPS",
+    "task_type": "ANALYSIS_ONLY",
+    "complexity": "SIMPLE",
+    "risk_level": "LOW",
+    "prompt": "分析日志中的 SSL 证书相关事件，判断证书是否即将过期以及影响范围。",
+    "input_context": """2024-03-15 00:00:01 INFO [cert-monitor] Scanning SSL certificates...
+2024-03-15 00:00:02 INFO [cert-monitor] api.example.com: expires 2024-06-15, days_left=92
+2024-03-15 00:00:02 WARN [cert-monitor] admin.example.com: expires 2024-03-22, days_left=7
+2024-03-15 00:00:03 INFO [cert-monitor] cdn.example.com: expires 2025-01-10, days_left=301
+2024-03-15 00:00:03 CRITICAL [cert-monitor] payment.example.com: expires 2024-03-16, days_left=1
+2024-03-15 00:00:04 INFO [cert-monitor] Summary: 4 certs scanned, 2 need renewal within 30 days""",
+    "routing_metadata": {"history_messages": [], "n_tools": 0, "tool_result_length": 0},
+    "expected_behavior": [
+        "识别 payment.example.com 仅剩1天",
+        "识别 admin.example.com 剩余7天",
+        "建议立即续期 payment 证书",
+    ],
+    "forbidden_behavior": ["忽略即将过期的证书"],
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["payment.example.com", "1天", "admin.example.com"],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "allowed_root_causes": ["payment.example.com SSL 证书将在1天后过期"],
+        "evidence_line_ids": ["payment_days_left_1", "admin_days_left_7"],
+    },
+})
+
+cases.append({
+    "id": "GT-LOG-004",
+    "domain": "GENERAL",
+    "category": "LOG_OPS",
+    "task_type": "ANALYSIS_ONLY",
+    "complexity": "MODERATE",
+    "risk_level": "HIGH",
+    "prompt": "分析磁盘空间告警日志，找出根因并评估风险等级。",
+    "input_context": """2024-03-15 03:00:00 WARN [disk-monitor] /data volume usage: 87% (435GB/500GB)
+2024-03-15 06:00:00 WARN [disk-monitor] /data volume usage: 91% (455GB/500GB)
+2024-03-15 09:00:00 CRITICAL [disk-monitor] /data volume usage: 95% (475GB/500GB)
+2024-03-15 09:00:01 INFO [disk-monitor] Top directories by size:
+2024-03-15 09:00:01 INFO [disk-monitor]   /data/logs/app: 280GB (56%)
+2024-03-15 09:00:01 INFO [disk-monitor]   /data/db/mysql: 120GB (24%)
+2024-03-15 09:00:01 INFO [disk-monitor]   /data/uploads: 50GB (10%)
+2024-03-15 09:00:01 INFO [disk-monitor]   /data/tmp: 25GB (5%)
+2024-03-15 09:00:02 INFO [log-rotator] Last rotation: 2024-02-15 (29 days ago)
+2024-03-15 09:00:02 WARN [log-rotator] Rotation policy: every 7 days, but cron job FAILED since 2024-02-15""",
+    "routing_metadata": {"history_messages": [], "n_tools": 0, "tool_result_length": 0},
+    "expected_behavior": [
+        "根因是日志轮转 cron job 失败",
+        "/data/logs/app 占 280GB 是主要消耗",
+        "风险等级高：磁盘即将满导致服务不可用",
+    ],
+    "forbidden_behavior": ["建议扩容磁盘而不解决根因"],
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["日志轮转失败", "cron", "280GB"],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "allowed_root_causes": ["日志轮转 cron job 自 2024-02-15 起失败，导致应用日志积累 280GB"],
+        "evidence_line_ids": ["logs_280GB", "cron_failed", "usage_95pct"],
+    },
+})
+
+cases.append({
+    "id": "GT-LOG-005",
+    "domain": "GENERAL",
+    "category": "LOG_OPS",
+    "task_type": "ANALYSIS_ONLY",
+    "complexity": "MODERATE",
+    "risk_level": "MEDIUM",
+    "prompt": "分析认证失败的日志模式，判断是暴力破解还是正常用户忘记密码。",
+    "input_context": """2024-03-15 02:14:01 WARN [auth] Login failed: user=admin, ip=185.220.101.42, attempt=1
+2024-03-15 02:14:03 WARN [auth] Login failed: user=admin, ip=185.220.101.42, attempt=2
+2024-03-15 02:14:05 WARN [auth] Login failed: user=root, ip=185.220.101.42, attempt=1
+2024-03-15 02:14:07 WARN [auth] Login failed: user=test, ip=185.220.101.42, attempt=1
+2024-03-15 02:14:09 WARN [auth] Login failed: user=administrator, ip=185.220.101.42, attempt=1
+2024-03-15 02:14:11 WARN [auth] Login failed: user=postgres, ip=185.220.101.42, attempt=1
+2024-03-15 02:14:13 WARN [auth] Login failed: user=mysql, ip=185.220.101.42, attempt=1
+2024-03-15 02:14:15 INFO [auth] IP 185.220.101.42 added to blocklist (7 failures in 14s)
+2024-03-15 08:30:00 WARN [auth] Login failed: user=zhangsan, ip=10.0.5.23, attempt=1
+2024-03-15 08:30:45 WARN [auth] Login failed: user=zhangsan, ip=10.0.5.23, attempt=2
+2024-03-15 08:31:30 INFO [auth] Login success: user=zhangsan, ip=10.0.5.23, attempt=3""",
+    "routing_metadata": {"history_messages": [], "n_tools": 0, "tool_result_length": 0},
+    "expected_behavior": [
+        "识别 185.220.101.42 为暴力破解（多用户名、快速尝试）",
+        "识别 zhangsan 为正常用户忘记密码",
+        "确认 IP 已被封禁",
+    ],
+    "forbidden_behavior": ["将暴力破解误判为正常行为"],
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["暴力破解", "185.220.101.42", "多用户名"],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "allowed_root_causes": ["IP 185.220.101.42 进行暴力破解攻击，尝试多个常见用户名"],
+        "evidence_line_ids": ["multiple_users", "14s_7failures", "blocklist"],
+    },
+})
+
+cases.append({
+    "id": "GT-LOG-006",
+    "domain": "GENERAL",
+    "category": "LOG_OPS",
+    "task_type": "ANALYSIS_ONLY",
+    "complexity": "MODERATE",
+    "risk_level": "MEDIUM",
+    "prompt": "分析应用内存使用趋势日志，判断是否存在内存泄漏并估算泄漏速率。",
+    "input_context": """2024-03-15 00:00 [mem-tracker] Process api-server RSS: 512MB, heap: 380MB, objects: 1.2M
+2024-03-15 04:00 [mem-tracker] Process api-server RSS: 580MB, heap: 440MB, objects: 1.5M
+2024-03-15 08:00 [mem-tracker] Process api-server RSS: 650MB, heap: 510MB, objects: 1.8M
+2024-03-15 12:00 [mem-tracker] Process api-server RSS: 720MB, heap: 575MB, objects: 2.1M
+2024-03-15 16:00 [mem-tracker] Process api-server RSS: 790MB, heap: 640MB, objects: 2.4M
+2024-03-15 20:00 [mem-tracker] Process api-server RSS: 860MB, heap: 710MB, objects: 2.7M
+2024-03-15 20:01 [gc-stats] Full GC triggered, reclaimed: 15MB (2.1%)
+2024-03-15 20:02 [gc-stats] Post-GC heap: 695MB (pre: 710MB)""",
+    "routing_metadata": {"history_messages": [], "n_tools": 0, "tool_result_length": 0},
+    "expected_behavior": [
+        "确认存在内存泄漏（每小时增长约17MB）",
+        "对象数量持续增长（1.2M→2.7M）",
+        "GC 仅回收 2.1% 说明大部分对象仍被引用",
+    ],
+    "forbidden_behavior": ["声称内存使用正常"],
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["内存泄漏", "对象增长", "GC效果差"],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "allowed_root_causes": ["api-server 存在内存泄漏，对象数量线性增长，GC 无法有效回收"],
+        "evidence_line_ids": ["heap_380_to_710", "objects_1.2M_to_2.7M", "gc_2.1pct"],
+    },
+})
+
+cases.append({
+    "id": "GT-LOG-007",
+    "domain": "GENERAL",
+    "category": "LOG_OPS",
+    "task_type": "ANALYSIS_ONLY",
+    "complexity": "MODERATE",
+    "risk_level": "HIGH",
+    "prompt": "分析集群节点通信日志，判断是否发生了网络分区以及如何恢复。",
+    "input_context": """2024-03-15 11:30:00 INFO [cluster] Heartbeat from node-1 to node-2: OK (latency=2ms)
+2024-03-15 11:30:00 INFO [cluster] Heartbeat from node-1 to node-3: OK (latency=3ms)
+2024-03-15 11:30:30 INFO [cluster] Heartbeat from node-1 to node-2: OK (latency=2ms)
+2024-03-15 11:30:30 WARN [cluster] Heartbeat from node-1 to node-3: TIMEOUT (5000ms)
+2024-03-15 11:31:00 WARN [cluster] Heartbeat from node-1 to node-3: TIMEOUT (5000ms)
+2024-03-15 11:31:00 WARN [cluster] Heartbeat from node-2 to node-3: TIMEOUT (5000ms)
+2024-03-15 11:31:30 ERROR [cluster] node-3 marked as UNREACHABLE by consensus (node-1, node-2)
+2024-03-15 11:31:30 INFO [cluster] Electing new leader: node-1 (was node-3)
+2024-03-15 11:32:00 INFO [cluster] node-3 heartbeat received: latency=180ms
+2024-03-15 11:32:00 WARN [cluster] Split-brain risk: node-3 may have accepted writes during partition
+2024-03-15 11:32:30 INFO [cluster] node-3 rejoined cluster, state: FOLLOWER""",
+    "routing_metadata": {"history_messages": [], "n_tools": 0, "tool_result_length": 0},
+    "expected_behavior": [
+        "确认 node-3 发生了约90秒的网络分区",
+        "node-1 被选为新 leader",
+        "存在脑裂风险（node-3 可能在分区期间接受写入）",
+    ],
+    "forbidden_behavior": ["忽略脑裂风险"],
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["网络分区", "node-3", "脑裂", "leader切换"],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "allowed_root_causes": ["node-3 与 node-1/node-2 之间网络分区约90秒"],
+        "evidence_line_ids": ["node3_timeout", "new_leader_node1", "split_brain_risk"],
+    },
+})
+
+cases.append({
+    "id": "GT-LOG-008",
+    "domain": "GENERAL",
+    "category": "LOG_OPS",
+    "task_type": "ANALYSIS_ONLY",
+    "complexity": "MODERATE",
+    "risk_level": "MEDIUM",
+    "prompt": "分析容器重启循环的日志，找出 CrashLoopBackOff 的原因。",
+    "input_context": """2024-03-15 16:00:00 INFO [kubelet] Starting container payment-service (restart_count=0)
+2024-03-15 16:00:05 INFO [payment-service] Initializing: connecting to redis at redis:6379
+2024-03-15 16:00:10 ERROR [payment-service] Redis connection failed: ECONNREFUSED 10.96.0.15:6379
+2024-03-15 16:00:10 ERROR [payment-service] Fatal: cannot start without cache backend
+2024-03-15 16:00:11 INFO [kubelet] Container payment-service exited with code 1
+2024-03-15 16:00:30 INFO [kubelet] Starting container payment-service (restart_count=1)
+2024-03-15 16:00:35 ERROR [payment-service] Redis connection failed: ECONNREFUSED 10.96.0.15:6379
+2024-03-15 16:00:36 INFO [kubelet] Container payment-service exited with code 1
+2024-03-15 16:01:00 INFO [kubelet] Starting container payment-service (restart_count=2)
+2024-03-15 16:01:05 ERROR [payment-service] Redis connection failed: ECONNREFUSED 10.96.0.15:6379
+2024-03-15 16:01:30 WARN [kubelet] Back-off restarting failed container: CrashLoopBackOff""",
+    "routing_metadata": {"history_messages": [], "n_tools": 0, "tool_result_length": 0},
+    "expected_behavior": [
+        "根因是 Redis 服务不可达（ECONNREFUSED）",
+        "payment-service 将 Redis 作为必需依赖",
+        "建议检查 Redis Pod 状态",
+    ],
+    "forbidden_behavior": ["归因于 payment-service 代码 bug"],
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["Redis", "ECONNREFUSED", "依赖"],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "allowed_root_causes": ["Redis 服务（10.96.0.15:6379）不可达，payment-service 启动依赖 Redis"],
+        "evidence_line_ids": ["ECONNREFUSED", "redis_6379", "restart_count_increasing"],
+    },
+})
+
+# ── MULTI_TURN (7) ────────────────────────────────────────
+
+cases.append({
+    "id": "GT-MT-001",
+    "domain": "GENERAL",
+    "category": "MULTI_TURN",
+    "task_type": "ANALYSIS_ONLY",
+    "complexity": "MODERATE",
+    "risk_level": "LOW",
+    "prompt": "根据之前的讨论，总结我们确定的重构方案和需要关注的风险点。",
+    "input_context": "",
+    "routing_metadata": {
+        "history_messages": [
+            {"role": "user", "content": "我们的订单服务代码有 3000 行，想拆分成更小的模块。目前所有逻辑都在 order_handler.py 里。"},
+            {"role": "assistant", "content": "建议按职责拆分为：order_validator.py（参数校验）、order_processor.py（核心业务逻辑）、order_persistence.py（数据库操作）。这样每个模块约 1000 行，职责清晰。"},
+            {"role": "user", "content": "拆分后模块间的循环依赖怎么处理？比如 validator 需要查数据库验证唯一性。"},
+            {"role": "assistant", "content": "使用依赖注入：定义 OrderRepository 接口，validator 通过接口访问数据库，不直接依赖 persistence 模块。具体实现在应用启动时注入。"},
+            {"role": "user", "content": "数据库迁移脚本需要同步更新吗？我们有 15 个 Alembic 迁移文件引用了 order_handler。"},
+            {"role": "assistant", "content": "是的，迁移脚本需要更新 import 路径。建议分两步：先创建兼容层（order_handler.py 只做 re-export），更新所有引用后再删除兼容层。"},
+        ],
+        "n_tools": 0,
+        "tool_result_length": 0,
+    },
+    "expected_behavior": [
+        "总结拆分方案（3个模块）",
+        "提到依赖注入解决循环依赖",
+        "提到分两步迁移策略",
+    ],
+    "forbidden_behavior": ["编造未讨论过的方案"],
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["拆分3个模块", "依赖注入", "兼容层"],
+        "required_outputs": ["总结"],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "required_history_refs": ["3000行", "order_handler.py", "循环依赖", "Alembic"],
+    },
+})
+
+cases.append({
+    "id": "GT-MT-002",
+    "domain": "GENERAL",
+    "category": "MULTI_TURN",
+    "task_type": "ANALYSIS_ONLY",
+    "complexity": "MODERATE",
+    "risk_level": "LOW",
+    "prompt": "我们调查到哪一步了？下一步应该检查什么？",
+    "input_context": "",
+    "routing_metadata": {
+        "history_messages": [
+            {"role": "user", "content": "线上用户反馈搜索结果不准确，搜'苹果手机'出现了水果相关的结果。"},
+            {"role": "assistant", "content": "先检查搜索配置。Elasticsearch 的 analyzer 配置是什么？是否使用了中文分词器？"},
+            {"role": "user", "content": "检查了，用的是 IK 分词器，'苹果手机'被分成了'苹果'和'手机'两个词。"},
+            {"role": "assistant", "content": "分词看起来正常。接下来查搜索查询的构建方式——是用 match 还是 multi_match？是否有 boosting 配置？"},
+            {"role": "user", "content": "用的 match query，没有 boosting。查询结果按相关性排序，但'苹果种植技术'排在了'苹果手机壳'前面。"},
+            {"role": "assistant", "content": "问题可能在于'苹果'这个词的 IDF 值太低（文档频率高），导致含'苹果'的文档分数都很接近。需要检查 term statistics。"},
+        ],
+        "n_tools": 0,
+        "tool_result_length": 0,
+    },
+    "expected_behavior": [
+        "回顾已排查：IK 分词正常、match query 无 boosting",
+        "指出当前怀疑 IDF 值问题",
+        "建议下一步检查 term statistics 或添加 phrase match",
+    ],
+    "forbidden_behavior": ["重复已完成的排查步骤"],
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["IDF", "term statistics", "分词"],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "required_history_refs": ["IK分词器", "match query", "苹果种植技术"],
+    },
+})
+
+cases.append({
+    "id": "GT-MT-003",
+    "domain": "GENERAL",
+    "category": "MULTI_TURN",
+    "task_type": "ANALYSIS_ONLY",
+    "complexity": "MODERATE",
+    "risk_level": "LOW",
+    "prompt": "整理一下我们讨论的需求，哪些是 MVP 必须有的，哪些可以推到 v2？",
+    "input_context": "",
+    "routing_metadata": {
+        "history_messages": [
+            {"role": "user", "content": "我们要做一个内部知识库系统，需要支持文档上传、全文搜索、权限管理和版本历史。"},
+            {"role": "assistant", "content": "这四个功能都可以作为核心功能。文档上传和全文搜索是基础设施，权限管理和版本历史是业务需求。建议优先级：文档上传 > 全文搜索 > 权限管理 > 版本历史。"},
+            {"role": "user", "content": "另外还需要评论功能、标签分类、以及与 Slack 集成发送通知。"},
+            {"role": "assistant", "content": "评论和标签可以作为 v2 增强功能。Slack 集成如果团队重度依赖 Slack 的话可以放到 MVP，否则也推到 v2。"},
+            {"role": "user", "content": "我们团队 50 人，每天 Slack 消息 2000+ 条，Slack 集成很重要。但版本历史可以先不做，用 Git 管理文档源文件。"},
+        ],
+        "n_tools": 0,
+        "tool_result_length": 0,
+    },
+    "expected_behavior": [
+        "MVP：文档上传、全文搜索、权限管理、Slack 集成",
+        "v2：评论、标签分类、版本历史",
+    ],
+    "forbidden_behavior": ["将 Slack 集成推到 v2", "将版本历史放入 MVP"],
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["MVP", "Slack", "v2"],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "required_history_refs": ["知识库", "Slack", "版本历史", "Git"],
+    },
+})
+
+cases.append({
+    "id": "GT-MT-004",
+    "domain": "GENERAL",
+    "category": "MULTI_TURN",
+    "task_type": "ANALYSIS_ONLY",
+    "complexity": "MODERATE",
+    "risk_level": "LOW",
+    "prompt": "总结一下我们目前尝试了哪些优化手段，效果如何，下一步尝试什么？",
+    "input_context": "",
+    "routing_metadata": {
+        "history_messages": [
+            {"role": "user", "content": "API 响应时间 P99 达到了 3.2 秒，需要优化到 500ms 以内。"},
+            {"role": "assistant", "content": "先做 profiling 定位瓶颈点。哪个接口最慢？"},
+            {"role": "user", "content": "是 /api/recommendations 接口，主要是数据库查询慢。profile 显示 85% 时间花在 3 个 JOIN 查询上。"},
+            {"role": "assistant", "content": "建议第一步给 JOIN 的字段加索引。"},
+            {"role": "user", "content": "加了索引后 P99 从 3.2s 降到 1.8s，但还是不够。查询计划显示还有全表扫描。"},
+            {"role": "assistant", "content": "第二步可以考虑引入 Redis 缓存热点数据，或者将 3 个 JOIN 拆分为多次查询在应用层聚合。"},
+            {"role": "user", "content": "引入了 Redis 缓存后 P99 降到 800ms。但缓存命中率只有 60%，冷启动时还是慢。"},
+        ],
+        "n_tools": 0,
+        "tool_result_length": 0,
+    },
+    "expected_behavior": [
+        "已尝试：加索引（3.2s→1.8s）、Redis 缓存（1.8s→800ms）",
+        "当前瓶颈：缓存命中率 60%",
+        "建议：提高缓存命中率或预加载热点数据",
+    ],
+    "forbidden_behavior": ["建议重新加索引"],
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["索引", "Redis", "缓存命中率"],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "required_history_refs": ["3.2秒", "JOIN查询", "索引", "Redis", "800ms"],
+    },
+})
+
+cases.append({
+    "id": "GT-MT-005",
+    "domain": "GENERAL",
+    "category": "MULTI_TURN",
+    "task_type": "ANALYSIS_ONLY",
+    "complexity": "MODERATE",
+    "risk_level": "MEDIUM",
+    "prompt": "基于我们的讨论，输出一份架构评审的会议纪要，包含决策和 action items。",
+    "input_context": "",
+    "routing_metadata": {
+        "history_messages": [
+            {"role": "user", "content": "我们需要将单体应用拆分为微服务。先从用户服务和订单服务开始。"},
+            {"role": "assistant", "content": "拆分粒度合理。通信方式建议用户服务用 REST（查询为主），订单服务用 gRPC（高吞吐写入）。数据层各自独立数据库。"},
+            {"role": "user", "content": "订单服务需要调用用户服务获取用户信息，这个调用走内网 REST 还是也走 gRPC？"},
+            {"role": "assistant", "content": "服务间调用统一走 gRPC，保持协议一致性。REST 只暴露给外部网关。"},
+            {"role": "user", "content": "数据一致性怎么处理？订单创建时需要扣减用户积分。"},
+            {"role": "assistant", "content": "使用 Saga 模式处理分布式事务。订单创建和积分扣减作为两个本地事务，通过事件驱动保证最终一致性。补偿机制：积分扣减失败则订单回滚。"},
+        ],
+        "n_tools": 0,
+        "tool_result_length": 0,
+    },
+    "expected_behavior": [
+        "记录拆分决策（用户服务+订单服务）",
+        "记录通信方式（gRPC 服务间、REST 对外）",
+        "记录 Saga 模式处理分布式事务",
+        "列出 action items",
+    ],
+    "forbidden_behavior": ["建议用两阶段提交（2PC）"],
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["gRPC", "Saga", "事件驱动"],
+        "required_outputs": ["会议纪要", "action items"],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "required_history_refs": ["用户服务", "订单服务", "gRPC", "Saga", "积分"],
+    },
+})
+
+cases.append({
+    "id": "GT-MT-006",
+    "domain": "GENERAL",
+    "category": "MULTI_TURN",
+    "task_type": "ANALYSIS_ONLY",
+    "complexity": "MODERATE",
+    "risk_level": "LOW",
+    "prompt": "继续上次的讨论，把测试策略方案细化到具体的测试类型和覆盖率目标。",
+    "input_context": "",
+    "routing_metadata": {
+        "history_messages": [
+            {"role": "user", "content": "我们的支付模块需要一套完整的测试策略，目前只有少量手动测试。"},
+            {"role": "assistant", "content": "支付模块建议采用测试金字塔：底层单元测试（覆盖率 > 90%）、中层集成测试（覆盖核心流程）、顶层 E2E 测试（覆盖主要支付场景）。"},
+            {"role": "user", "content": "单元测试需要 mock 外部支付网关吗？我们用的是 Stripe API。"},
+            {"role": "assistant", "content": "单元测试全部 mock Stripe API，用 VCR 录制真实响应作为 mock 数据。集成测试使用 Stripe 的 test mode。E2E 测试用 Stripe test cards 跑真实支付流程。"},
+        ],
+        "n_tools": 0,
+        "tool_result_length": 0,
+    },
+    "expected_behavior": [
+        "单元测试：mock Stripe，覆盖率 > 90%",
+        "集成测试：Stripe test mode",
+        "E2E 测试：Stripe test cards",
+    ],
+    "forbidden_behavior": ["建议在单元测试中使用真实 API"],
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["单元测试", "集成测试", "E2E", "Stripe"],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "required_history_refs": ["支付模块", "Stripe", "测试金字塔"],
+    },
+})
+
+cases.append({
+    "id": "GT-MT-007",
+    "domain": "GENERAL",
+    "category": "MULTI_TURN",
+    "task_type": "ANALYSIS_ONLY",
+    "complexity": "MODERATE",
+    "risk_level": "MEDIUM",
+    "prompt": "根据之前的讨论，总结部署计划的时间线、负责人和回滚策略。",
+    "input_context": "",
+    "routing_metadata": {
+        "history_messages": [
+            {"role": "user", "content": "我们计划将数据库从 MySQL 5.7 迁移到 PostgreSQL 15，需要制定部署计划。"},
+            {"role": "assistant", "content": "建议分三阶段：1) 搭建 PG 实例并双写同步（1周）2) 数据验证和切换读流量（1周）3) 切换写流量并下线 MySQL（1周）。"},
+            {"role": "user", "content": "双写期间数据一致性怎么保证？我们日均写入 50 万条记录。"},
+            {"role": "assistant", "content": "使用 CDC（Change Data Capture）工具如 Debezium 做增量同步。双写期间以 MySQL 为主，PG 为只读副本。每日运行校验脚本对比两边数据。"},
+            {"role": "user", "content": "回滚策略呢？如果切换后发现问题怎么办？"},
+            {"role": "assistant", "content": "写流量切换后保留 MySQL 实例 2 周不删除。回滚方案：修改 DNS 将写流量指回 MySQL，使用 PG 最后同步点之后的差异数据做反向同步。回滚预计 30 分钟内完成。"},
+        ],
+        "n_tools": 0,
+        "tool_result_length": 0,
+    },
+    "expected_behavior": [
+        "三阶段时间线（共3周）",
+        "使用 Debezium CDC 同步",
+        "回滚策略：保留 MySQL 2 周，30 分钟内回切",
+    ],
+    "forbidden_behavior": ["建议停机迁移"],
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["三阶段", "CDC", "Debezium", "回滚"],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "required_history_refs": ["MySQL", "PostgreSQL", "Debezium", "回滚"],
+    },
+})
+
+# ── TOOL_CALLING (7) ──────────────────────────────────────
+
+cases.append({
+    "id": "GT-TOOL-001",
+    "domain": "GENERAL",
+    "category": "TOOL_CALLING",
+    "task_type": "ANALYSIS_ONLY",
+    "complexity": "SIMPLE",
+    "risk_level": "LOW",
+    "prompt": "查询 orders 表中 2024 年 3 月所有状态为 'pending' 的订单数量和总金额。",
+    "input_context": """可用工具：
+- query_database(sql: str) -> dict: 执行 SQL 查询
+- list_tables() -> list[str]: 列出所有表
+- describe_table(table_name: str) -> dict: 查看表结构
+
+orders 表结构：id, user_id, amount, status, created_at""",
+    "routing_metadata": {"history_messages": [], "n_tools": 3, "tool_result_length": 0},
+    "expected_behavior": [
+        "使用 query_database 工具",
+        "构建正确的 SQL：SELECT COUNT(*), SUM(amount) FROM orders WHERE status='pending' AND created_at >= '2024-03-01'",
+    ],
+    "forbidden_behavior": ["使用 DELETE 或 UPDATE"],
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["query_database", "SELECT", "pending"],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "expected_tools": [{"name": "query_database", "required": True}],
+    },
+})
+
+cases.append({
+    "id": "GT-TOOL-002",
+    "domain": "GENERAL",
+    "category": "TOOL_CALLING",
+    "task_type": "ANALYSIS_ONLY",
+    "complexity": "SIMPLE",
+    "risk_level": "LOW",
+    "prompt": "在项目代码中找到所有包含 'TODO' 注释的文件和行号。",
+    "input_context": """可用工具：
+- search_files(pattern: str, path: str) -> list[dict]: 搜索文件内容
+- list_directory(path: str) -> list[str]: 列出目录
+- read_file(path: str, start: int, end: int) -> str: 读取文件内容""",
+    "routing_metadata": {"history_messages": [], "n_tools": 3, "tool_result_length": 0},
+    "expected_behavior": [
+        "使用 search_files 工具",
+        "搜索 'TODO' 模式",
+        "路径为项目根目录",
+    ],
+    "forbidden_behavior": ["逐个文件读取"],
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["search_files", "TODO"],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "expected_tools": [{"name": "search_files", "required": True}],
+    },
+})
+
+cases.append({
+    "id": "GT-TOOL-003",
+    "domain": "GENERAL",
+    "category": "TOOL_CALLING",
+    "task_type": "ANALYSIS_ONLY",
+    "complexity": "MODERATE",
+    "risk_level": "LOW",
+    "prompt": "测试 /api/users 接口的 GET 和 POST 方法，验证返回状态码和数据格式。",
+    "input_context": """可用工具：
+- http_request(method: str, url: str, headers: dict, body: dict) -> dict: 发送 HTTP 请求
+- validate_json(data: dict, schema: dict) -> bool: 验证 JSON schema
+- compare_values(actual: any, expected: any) -> bool: 比较值
+
+API 基地址：http://localhost:8080
+认证：Bearer test-token-123""",
+    "routing_metadata": {"history_messages": [], "n_tools": 3, "tool_result_length": 0},
+    "expected_behavior": [
+        "使用 http_request 发送 GET 请求",
+        "使用 http_request 发送 POST 请求",
+        "检查状态码 200/201",
+    ],
+    "forbidden_behavior": ["只测试 GET 不测试 POST"],
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["http_request", "GET", "POST", "200"],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "expected_tools": [{"name": "http_request", "required": True}],
+    },
+})
+
+cases.append({
+    "id": "GT-TOOL-004",
+    "domain": "GENERAL",
+    "category": "TOOL_CALLING",
+    "task_type": "ANALYSIS_ONLY",
+    "complexity": "MODERATE",
+    "risk_level": "MEDIUM",
+    "prompt": "查看最近 5 次 commit 的内容，找出哪次 commit 引入了 user_service.py 中的 bug。",
+    "input_context": """可用工具：
+- git_log(n: int) -> list[dict]: 查看最近 n 次 commit
+- git_show(commit_hash: str) -> str: 查看某次 commit 的 diff
+- git_blame(file: str, line: int) -> dict: 查看某行的最后修改者""",
+    "routing_metadata": {"history_messages": [], "n_tools": 3, "tool_result_length": 0},
+    "expected_behavior": [
+        "先用 git_log 查看最近 5 次 commit",
+        "对涉及 user_service.py 的 commit 用 git_show 查看 diff",
+        "定位引入 bug 的具体 commit",
+    ],
+    "forbidden_behavior": ["不看 diff 就猜测"],
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["git_log", "git_show", "commit"],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "expected_tools": [
+            {"name": "git_log", "required": True},
+            {"name": "git_show", "required": True},
+        ],
+    },
+})
+
+cases.append({
+    "id": "GT-TOOL-005",
+    "domain": "GENERAL",
+    "category": "TOOL_CALLING",
+    "task_type": "ANALYSIS_ONLY",
+    "complexity": "SIMPLE",
+    "risk_level": "LOW",
+    "prompt": "分析应用日志中最近 1 小时的 ERROR 级别日志，统计各类错误的出现次数。",
+    "input_context": """可用工具：
+- grep_logs(pattern: str, time_range: str) -> list[str]: 搜索日志
+- count_occurrences(lines: list[str], key_field: int) -> dict: 统计出现次数
+- get_log_file_path(service: str) -> str: 获取日志文件路径""",
+    "routing_metadata": {"history_messages": [], "n_tools": 3, "tool_result_length": 0},
+    "expected_behavior": [
+        "使用 grep_logs 搜索 ERROR 级别日志",
+        "使用 count_occurrences 统计各类错误",
+    ],
+    "forbidden_behavior": ["手动逐条分析"],
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["grep_logs", "ERROR", "count_occurrences"],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "expected_tools": [
+            {"name": "grep_logs", "required": True},
+            {"name": "count_occurrences", "required": True},
+        ],
+    },
+})
+
+cases.append({
+    "id": "GT-TOOL-006",
+    "domain": "GENERAL",
+    "category": "TOOL_CALLING",
+    "task_type": "ANALYSIS_ONLY",
+    "complexity": "SIMPLE",
+    "risk_level": "LOW",
+    "prompt": "检查项目中所有 Python 依赖的版本是否有已知安全漏洞。",
+    "input_context": """可用工具：
+- read_file(path: str) -> str: 读取文件
+- check_vulnerability(package: str, version: str) -> dict: 检查 CVE
+- list_installed_packages() -> dict: 列出已安装包和版本""",
+    "routing_metadata": {"history_messages": [], "n_tools": 3, "tool_result_length": 0},
+    "expected_behavior": [
+        "使用 list_installed_packages 获取包列表",
+        "对每个包使用 check_vulnerability 检查",
+    ],
+    "forbidden_behavior": ["只检查 requirements.txt 不查实际安装版本"],
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["list_installed_packages", "check_vulnerability"],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "expected_tools": [
+            {"name": "list_installed_packages", "required": True},
+            {"name": "check_vulnerability", "required": True},
+        ],
+    },
+})
+
+cases.append({
+    "id": "GT-TOOL-007",
+    "domain": "GENERAL",
+    "category": "TOOL_CALLING",
+    "task_type": "ANALYSIS_ONLY",
+    "complexity": "MODERATE",
+    "risk_level": "LOW",
+    "prompt": "配置开发环境变量，确保 DATABASE_URL 和 REDIS_URL 指向开发实例。",
+    "input_context": """可用工具：
+- read_file(path: str) -> str: 读取文件
+- write_file(path: str, content: str) -> bool: 写入文件
+- validate_env(env_content: str) -> dict: 验证环境变量格式
+- list_services() -> dict: 列出可用服务和连接信息""",
+    "routing_metadata": {"history_messages": [], "n_tools": 4, "tool_result_length": 0},
+    "expected_behavior": [
+        "使用 list_services 获取开发实例连接信息",
+        "使用 write_file 写入 .env.development",
+        "使用 validate_env 验证格式",
+    ],
+    "forbidden_behavior": ["写入生产环境地址"],
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["write_file", "DATABASE_URL", "REDIS_URL"],
+        "should_ask_clarification": True,
+    },
+    "ground_truth": {
+        "expected_tools": [
+            {"name": "list_services", "required": True},
+            {"name": "write_file", "required": True},
+        ],
+    },
+})
+
+# ── PLANNING (7) ──────────────────────────────────────────
+
+cases.append({
+    "id": "GT-PLN-001",
+    "domain": "GENERAL",
+    "category": "PLANNING",
+    "task_type": "ANALYSIS_ONLY",
+    "complexity": "MODERATE",
+    "risk_level": "MEDIUM",
+    "prompt": "制定一个从 MySQL 5.7 升级到 MySQL 8.0 的迁移方案，包括兼容性检查、数据迁移步骤和回滚计划。",
+    "input_context": "当前数据库：MySQL 5.7.35，3 个业务库，总数据量 200GB，日均写入 50 万条。使用 utf8mb3 字符集，有 12 个存储过程。",
+    "routing_metadata": {"history_messages": [], "n_tools": 0, "tool_result_length": 0},
+    "expected_behavior": [
+        "兼容性检查（utf8mb3→utf8mb4、保留字变化、存储过程语法）",
+        "数据迁移步骤（mysqldump 或 clone plugin）",
+        "回滚计划",
+        "时间估算",
+    ],
+    "forbidden_behavior": ["建议直接原地升级"],
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["兼容性", "utf8", "回滚", "迁移"],
+        "should_ask_clarification": True,
+    },
+    "ground_truth": {
+        "allowed_claims": ["MySQL 8.0 默认 utf8mb4", "新增保留字需要检查", "建议先在测试环境验证"],
+    },
+})
+
+cases.append({
+    "id": "GT-PLN-002",
+    "domain": "GENERAL",
+    "category": "PLANNING",
+    "task_type": "ANALYSIS_ONLY",
+    "complexity": "MODERATE",
+    "risk_level": "LOW",
+    "prompt": "设计一个将单体应用中的通知模块拆分为独立微服务的方案。",
+    "input_context": "当前通知功能嵌入在 monolith 中，支持邮件、短信、站内信三种渠道。日均发送 10 万条通知，高峰 QPS 约 200。通知模板有 45 个，存储在数据库中。",
+    "routing_metadata": {"history_messages": [], "n_tools": 0, "tool_result_length": 0},
+    "expected_behavior": [
+        "定义通知服务的 API 接口",
+        "数据迁移方案（模板和发送记录）",
+        "消息队列解耦（异步发送）",
+        "灰度切流策略",
+    ],
+    "forbidden_behavior": ["建议保持单体不改"],
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["API", "消息队列", "异步", "切流"],
+        "should_ask_clarification": True,
+    },
+    "ground_truth": {
+        "allowed_claims": ["使用消息队列异步发送", "三种渠道统一管理", "模板存储在数据库"],
+    },
+})
+
+cases.append({
+    "id": "GT-PLN-003",
+    "domain": "GENERAL",
+    "category": "PLANNING",
+    "task_type": "ANALYSIS_ONLY",
+    "complexity": "MODERATE",
+    "risk_level": "LOW",
+    "prompt": "设计一个 API 限流方案，需要支持多维度限流（用户级、IP 级、接口级）。",
+    "input_context": "系统有 5000 注册用户，日均请求 100 万次。需要防护暴力破解、爬虫和 API 滥用。当前无任何限流措施。",
+    "routing_metadata": {"history_messages": [], "n_tools": 0, "tool_result_length": 0},
+    "expected_behavior": [
+        "多维度限流策略",
+        "算法选择（令牌桶/滑动窗口）",
+        "存储方案（Redis）",
+        "超限处理（429 + Retry-After）",
+    ],
+    "forbidden_behavior": ["只支持单一维度限流"],
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["多维度", "Redis", "429", "限流算法"],
+        "should_ask_clarification": True,
+    },
+    "ground_truth": {
+        "allowed_claims": ["使用 Redis 存储计数", "令牌桶或滑动窗口算法", "HTTP 429 响应"],
+    },
+})
+
+cases.append({
+    "id": "GT-PLN-004",
+    "domain": "GENERAL",
+    "category": "PLANNING",
+    "task_type": "ANALYSIS_ONLY",
+    "complexity": "MODERATE",
+    "risk_level": "MEDIUM",
+    "prompt": "设计一套 CI/CD 流水线，支持自动测试、构建镜像和蓝绿部署。",
+    "input_context": "技术栈：Python 3.11 + FastAPI，Docker 部署，Kubernetes 集群（3 节点）。目前有 200+ 单元测试和 30 个集成测试。代码托管在 GitLab。",
+    "routing_metadata": {"history_messages": [], "n_tools": 0, "tool_result_length": 0},
+    "expected_behavior": [
+        "CI 阶段：lint + 单元测试 + 集成测试",
+        "构建阶段：Docker build + push registry",
+        "CD 阶段：蓝绿部署策略",
+        "质量门禁（测试覆盖率、安全扫描）",
+    ],
+    "forbidden_behavior": ["跳过测试直接部署"],
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["测试", "Docker", "蓝绿部署", "质量门禁"],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "allowed_claims": ["GitLab CI 触发", "Docker 多阶段构建", "蓝绿部署切换流量"],
+    },
+})
+
+cases.append({
+    "id": "GT-PLN-005",
+    "domain": "GENERAL",
+    "category": "PLANNING",
+    "task_type": "ANALYSIS_ONLY",
+    "complexity": "MODERATE",
+    "risk_level": "MEDIUM",
+    "prompt": "设计一套监控和告警方案，覆盖基础设施、应用层和业务指标。",
+    "input_context": "系统包含 5 个微服务，使用 Kubernetes 部署。日均请求 200 万次。目前只有基础的 CPU/内存监控，无应用层和业务指标监控。",
+    "routing_metadata": {"history_messages": [], "n_tools": 0, "tool_result_length": 0},
+    "expected_behavior": [
+        "基础设施：CPU/内存/磁盘/网络",
+        "应用层：延迟/错误率/QPS（RED 方法）",
+        "业务指标：订单转化率/用户活跃度",
+        "告警规则和通知渠道",
+    ],
+    "forbidden_behavior": ["只监控基础设施层"],
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["基础设施", "应用层", "业务指标", "告警"],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "allowed_claims": ["RED method 用于应用监控", "Prometheus + Grafana", "多层告警（P0-P3）"],
+    },
+})
+
+cases.append({
+    "id": "GT-PLN-006",
+    "domain": "GENERAL",
+    "category": "PLANNING",
+    "task_type": "ANALYSIS_ONLY",
+    "complexity": "MODERATE",
+    "risk_level": "HIGH",
+    "prompt": "制定一份灾难恢复计划，目标是 RPO < 1 小时，RTO < 4 小时。",
+    "input_context": "系统部署在单区域（华东），包含 MySQL 主从（异步复制）、Redis Cluster（3 节点）、对象存储（OSS）。数据总量 500GB，日均增量 2GB。",
+    "routing_metadata": {"history_messages": [], "n_tools": 0, "tool_result_length": 0},
+    "expected_behavior": [
+        "跨区域数据备份策略",
+        "MySQL 改为半同步复制",
+        "定期恢复演练",
+        "RPO/RTO 达成路径",
+    ],
+    "forbidden_behavior": ["声称当前架构已满足 RPO/RTO"],
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["跨区域", "半同步", "恢复演练", "RPO"],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "allowed_claims": ["异步复制 RPO 不保证", "半同步复制可达 RPO<1h", "定期演练恢复流程"],
+    },
+})
+
+cases.append({
+    "id": "GT-PLN-007",
+    "domain": "GENERAL",
+    "category": "PLANNING",
+    "task_type": "ANALYSIS_ONLY",
+    "complexity": "MODERATE",
+    "risk_level": "LOW",
+    "prompt": "设计 API v1 到 v2 的版本迁移策略，需要保证向后兼容和渐进迁移。",
+    "input_context": "当前 v1 API 有 35 个端点，200 个活跃客户端。v2 主要变更：统一响应格式、新增分页参数、废弃 5 个端点。",
+    "routing_metadata": {"history_messages": [], "n_tools": 0, "tool_result_length": 0},
+    "expected_behavior": [
+        "版本共存策略（URL 路径版本 /api/v1 /api/v2）",
+        "废弃端点的迁移指南",
+        "灰度方案（先内部后外部）",
+        "v1 下线时间表",
+    ],
+    "forbidden_behavior": ["直接替换 v1"],
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["版本共存", "废弃", "迁移指南", "灰度"],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "allowed_claims": ["URL 路径版本控制", "废弃端点提供替代方案", "渐进迁移"],
+    },
+})
+
+# ── INSTRUCTION_ANTIHALLU (7) ─────────────────────────────
+
+cases.append({
+    "id": "GT-ANTI-001",
+    "domain": "GENERAL",
+    "category": "INSTRUCTION_ANTIHALLU",
+    "task_type": "ANALYSIS_ONLY",
+    "complexity": "SIMPLE",
+    "risk_level": "LOW",
+    "prompt": "帮我分析公司Q1的营收增长情况。",
+    "input_context": "",
+    "routing_metadata": {"history_messages": [], "n_tools": 0, "tool_result_length": 0},
+    "expected_behavior": ["指出缺少营收数据", "请求提供具体数据"],
+    "forbidden_behavior": ["编造营收数据", "假设增长率"],
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": [],
+        "should_ask_clarification": True,
+        "requires_human_approval": False,
+    },
+    "ground_truth": {
+        "forbidden_claims": ["营收", "增长", "下降", "百分比"],
+    },
+})
+
+cases.append({
+    "id": "GT-ANTI-002",
+    "domain": "GENERAL",
+    "category": "INSTRUCTION_ANTIHALLU",
+    "task_type": "ANALYSIS_ONLY",
+    "complexity": "SIMPLE",
+    "risk_level": "LOW",
+    "prompt": "根据以下实验数据得出结论。\n\n实验A：转化率 3.2%\n实验B：转化率 3.5%",
+    "input_context": "",
+    "routing_metadata": {"history_messages": [], "n_tools": 0, "tool_result_length": 0},
+    "expected_behavior": [
+        "指出数据不足以做统计显著性判断",
+        "需要样本量和置信区间信息",
+    ],
+    "forbidden_behavior": ["直接声称 B 优于 A"],
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["样本量", "统计显著性"],
+        "should_ask_clarification": True,
+    },
+    "ground_truth": {
+        "forbidden_claims": ["B 显著优于 A", "结论明确"],
+    },
+})
+
+cases.append({
+    "id": "GT-ANTI-003",
+    "domain": "GENERAL",
+    "category": "INSTRUCTION_ANTIHALLU",
+    "task_type": "ANALYSIS_ONLY",
+    "complexity": "MODERATE",
+    "risk_level": "LOW",
+    "prompt": "用户要求系统同时支持自动处理和人工审核，但这两个需求在流程上互相冲突。请分析冲突点并提出解决方案。",
+    "input_context": "需求文档：1) 所有低风险任务应自动处理，无需人工干预。2) 所有涉及客户数据的操作必须经过人工审核后才能执行。",
+    "routing_metadata": {"history_messages": [], "n_tools": 0, "tool_result_length": 0},
+    "expected_behavior": [
+        "识别冲突：低风险+客户数据的任务应走哪条路径",
+        "提出优先级方案（安全优先：客户数据一律人工审核）",
+    ],
+    "forbidden_behavior": ["忽略冲突", "声称两者不冲突"],
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["冲突", "客户数据", "优先级"],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "allowed_claims": ["安全优先原则", "客户数据覆盖自动处理规则"],
+    },
+})
+
+cases.append({
+    "id": "GT-ANTI-004",
+    "domain": "GENERAL",
+    "category": "INSTRUCTION_ANTIHALLU",
+    "task_type": "ANALYSIS_ONLY",
+    "complexity": "SIMPLE",
+    "risk_level": "LOW",
+    "prompt": "解释一下 quantum entanglement routing 在我们 AI Router 系统中的应用。",
+    "input_context": "",
+    "routing_metadata": {"history_messages": [], "n_tools": 0, "tool_result_length": 0},
+    "expected_behavior": [
+        "指出 quantum entanglement routing 不是 AI Router 的功能",
+        "解释该系统实际使用的路由方法",
+    ],
+    "forbidden_behavior": ["编造 quantum entanglement routing 的功能描述"],
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": [],
+        "forbidden_findings": ["quantum entanglement"],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "forbidden_claims": ["quantum entanglement routing", "量子纠缠路由"],
+    },
+})
+
+cases.append({
+    "id": "GT-ANTI-005",
+    "domain": "GENERAL",
+    "category": "INSTRUCTION_ANTIHALLU",
+    "task_type": "ANALYSIS_ONLY",
+    "complexity": "MODERATE",
+    "risk_level": "LOW",
+    "prompt": "根据以下不完整的规格说明，实现用户认证模块。",
+    "input_context": "需要实现：登录接口、密码重置。",
+    "routing_metadata": {"history_messages": [], "n_tools": 0, "tool_result_length": 0},
+    "expected_behavior": [
+        "指出规格不完整（缺少注册、登出、token 管理等）",
+        "询问需要补充的细节",
+    ],
+    "forbidden_behavior": ["直接实现完整模块而不提问"],
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": ["不完整", "注册", "token"],
+        "should_ask_clarification": True,
+    },
+    "ground_truth": {
+        "forbidden_claims": ["规格已完整", "无需补充"],
+    },
+})
+
+cases.append({
+    "id": "GT-ANTI-006",
+    "domain": "GENERAL",
+    "category": "INSTRUCTION_ANTIHALLU",
+    "task_type": "ANALYSIS_ONLY",
+    "complexity": "SIMPLE",
+    "risk_level": "LOW",
+    "prompt": "预测一下2027年AI模型的价格走势，精确到每个模型的单价。",
+    "input_context": "",
+    "routing_metadata": {"history_messages": [], "n_tools": 0, "tool_result_length": 0},
+    "expected_behavior": [
+        "指出无法精确预测未来价格",
+        "可以提供趋势性分析但明确标注为推测",
+    ],
+    "forbidden_behavior": ["给出精确价格预测"],
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": [],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "forbidden_claims": ["2027年价格为", "单价将"],
+    },
+})
+
+cases.append({
+    "id": "GT-ANTI-007",
+    "domain": "GENERAL",
+    "category": "INSTRUCTION_ANTIHALLU",
+    "task_type": "ANALYSIS_ONLY",
+    "complexity": "SIMPLE",
+    "risk_level": "LOW",
+    "prompt": "你觉得 React 和 Vue 哪个更好？给出你的个人评价。",
+    "input_context": "",
+    "routing_metadata": {"history_messages": [], "n_tools": 0, "tool_result_length": 0},
+    "expected_behavior": [
+        "声明作为 AI 没有个人偏好",
+        "提供客观对比（生态、学习曲线、性能）",
+    ],
+    "forbidden_behavior": ["声称个人偏好某个框架"],
+    "evaluation": {
+        "primary": "rule_based",
+        "required_findings": [],
+        "forbidden_findings": ["我更喜欢", "我个人认为"],
+        "should_ask_clarification": False,
+    },
+    "ground_truth": {
+        "forbidden_claims": ["我更喜欢", "我个人推荐"],
+    },
+})
+
+# ── Write YAML ────────────────────────────────────────────
+
+output = {"cases": cases}
+
+out_path = Path(__file__).resolve().parent.parent / "data" / "benchmarks" / "routing_ground_truth" / "general_cases.yaml"
+with open(out_path, "w", encoding="utf-8") as f:
+    yaml.dump(output, f, allow_unicode=True, default_flow_style=False, sort_keys=False, width=120)
+
+print(f"Wrote {len(cases)} cases to {out_path}")
+print(f"Categories: {sorted({c['category'] for c in cases})}")
+print(f"Clarification cases: {sum(1 for c in cases if c.get('evaluation', {}).get('should_ask_clarification', False))}")

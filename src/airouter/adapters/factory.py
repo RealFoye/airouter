@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 
-from airouter.adapters.base import BaseAdapter
+from airouter.adapters.base import AdapterAuthError, BaseAdapter
 from airouter.adapters.mock import MockAdapter
 from airouter.adapters.openai_compat import OpenAICompatAdapter
 from airouter.config import AppSettings, ModelEntry
@@ -29,14 +29,17 @@ class AdapterFactory:
         "minimax": "minimax_api_key",
     }
 
-    def __init__(self, settings: AppSettings | None = None):
+    def __init__(self, settings: AppSettings | None = None, allow_mock_fallback: bool = True):
         self._settings = settings or AppSettings()
+        self._allow_mock_fallback = allow_mock_fallback
         self._adapters: dict[tuple[str, str], BaseAdapter] = {}
 
     def get_adapter(self, model_entry: ModelEntry) -> BaseAdapter:
         """根据 provider + api_base 返回适配器。
 
-        同 (provider, api_base) 复用实例。key 缺失时降级到 MockAdapter。
+        同 (provider, api_base) 复用实例。key 缺失时：
+        - allow_mock_fallback=True → 降级到 MockAdapter
+        - allow_mock_fallback=False → 抛出 AdapterAuthError
         """
         cache_key = (model_entry.provider, model_entry.api_base)
 
@@ -54,6 +57,11 @@ class AdapterFactory:
 
         if not api_key:
             env_hint = f"AIROUTER_{key_attr.upper()}" if key_attr else f"unknown provider: {provider}"
+            if not self._allow_mock_fallback:
+                raise AdapterAuthError(
+                    f"API key missing for provider={provider} model={model_entry.name} "
+                    f"(env: {env_hint}), and mock fallback is disabled"
+                )
             logger.warning(
                 "provider=%s model=%s API key 未配置（环境变量 %s），"
                 "降级到 MockAdapter",

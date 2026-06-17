@@ -95,6 +95,7 @@ def test_filter_sensitive_data_excludes_no_sensitive(selector: ModelSelector, al
     candidates = selector.filter_candidates(all_models, features)
     tier_names = [m.name for m in candidates]
     assert "tier3-a" not in tier_names  # allow_sensitive_data=False
+    assert "tier2-a" in tier_names  # high sensitivity gets Tier 2 fallback for SIMPLE
 
 
 def test_filter_context_window(selector: ModelSelector, all_models):

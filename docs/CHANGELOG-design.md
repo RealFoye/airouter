@@ -98,6 +98,26 @@
 | 88 | Benchmark | L2 auto-score 关键词修正：BA-LOGIC-002 / CR-PERF-002 离线重评分 | 修正 |
 | 89 | Benchmark | L2 评估体系重构：Auto-score 改进 + Absolute Judge + Pairwise 盲评，三层评估，1050/1050 成功 | 重大新增 |
 | 90 | Benchmark | Finance Judge 辅助审计：MiniMax-M3 独立评分 + 规则分对比 + 幻觉风险检测 + --judge-existing CLI | 新增 |
+| 91 | Benchmark | Routing Ground Truth：Oracle 真值评测 + 4 层评分链 + 策略回放 + 容器沙箱 + ComplexityContext | 新增 |
+| 92 | Benchmark | Holdout 60 cases：8 领域通用任务集 + 机器可验证真值 + 全链路 mock 验证 | 新增 |
+| 93 | Benchmark | Routing GT P1 修复（1/2）：沙箱安全加固 + Schema 三态 status + 多数投票 + SAFETY_HARD_FAILURES | 修正 |
+| 94 | Benchmark | Routing GT P1 修复（2/2）：JSONL append + any-success resume + frozen rerun + mock 答案泄漏修复 | 修正 |
+| 95 | Benchmark | Routing GT P1 修复（3/3）：Harness test_files 接入评分链 + 真实 API 接线 + 沙箱 pre/post-patch 验证 | 修正 |
+| 96 | Benchmark | Routing GT P1 修复（4/4）：A/B 层真实回放——feature_resolver 接口 + Router 注入 + 5 信号策略 + 4 E2E 变体 | 重构 |
+| 97 | Benchmark | Holdout 数据重做：60 cases 全部真实内容，无占位文本，真值算术验证，CODE_DEBUG 含真实 bug + test_files | 重做 |
+| 98 | Benchmark | 测试和报告收口：CLI routing 集成测试、数据质量测试、evaluation_manifest 冻结 | 收口 |
+| 99 | Benchmark | Routing GT v4 第一批：--limit 精确切片 + resume 计数 + Oracle 完整 case 过滤 + analysis_deferred | 修正 |
+| 100 | Benchmark | Routing GT v4 第二批：forbidden_outputs 四类语义 + action 归一化 + Oracle action 优先级 | 修正 |
+| 101 | Benchmark | Routing GT v4 第三批：Dev/Holdout 分离 + manifest 六项强校验 + dataset 路由 | 修正 |
+| 102 | Benchmark | Routing GT v4 第四批：沙箱 pre/post-patch 验证 + test_files_modified + passed 三条件 | 增强 |
+| 103 | Benchmark | Routing GT v4 第五批：独立 Judge 模块 + 真值隔离 + 三文件输出 + 硬失败不可解除 | 新增 |
+| 104 | Benchmark | Routing GT v4 第六批：ThreadPoolExecutor 并发 + AdapterAuthError 取消 + --rerun 全量重跑 | 增强 |
+| 105 | Benchmark | Routing GT v6 收口：rebuild_analysis 单一入口 + complete_aggregated 过滤 + Dev/Holdout 三路径统一 + Judge 并发/重试/AuthError + 物理调用计数 | 修正 |
+| 106 | Benchmark | fabricated_validation 三层判定：executed=True 硬失败 / results 非空软扣分 / NLP 审计标记 | 修正 |
+| 107 | Benchmark | missed_critical_risk + dangerous_action_unwarned 降级为软违规：语言不匹配导致误判 | 修正 |
+| 108 | Benchmark | Judge 真值泄漏检测修复：排除 raw_output 中的自然术语（oracle、ground_truth 等） | 修正 |
+| 109 | Benchmark | generate_oracles Dev/Holdout 分离修复：只遍历 cases 参数中的 case_id 子集 | 修正 |
+| 110 | Benchmark | Ground Truth Benchmark 正式运行：450/450 pair + 450/450 Judge + 90 complete case + 正式报告 | 里程碑 |
 
 ---
 
@@ -1890,6 +1910,562 @@ L2 150-pair 全量跑完后，发现 6 个低分 pair 是评分器关键词覆�
 - `src/airouter/cli/benchmark.py`：`--judge-existing` CLI 路径
 - `tests/unit/test_finance_judge.py`（新建）：44 个单元测试
 - `tests/integration/test_benchmark_finance.py`：+2 个 CLI 集成测试
+
+---
+
+### #91 Routing Ground Truth Benchmark：Oracle 真值评测
+
+**原来：**
+OpenSquilla 校准（70 cases）衡量的是"ML 猜中了多少个人工复杂度标签"，但真正要回答的问题是：同一项工作，某路由策略是否比 Rules 更经常选中既能完成任务、又不会多花钱的模型？
+
+**改为：**
+全新的 Routing Ground Truth Benchmark（`--level routing`），核心创新：
+- **Oracle 作为真值**：oracle_model = 中位成本最低的及格模型，不再依赖人工复杂度标签
+- **4 层评分链**：JSON 解析 → 确定性验证（字段级，非关键词）→ 规则评分（10 维度加权）→ 盲审 Judge → 人工抽检
+- **Oracle set + 容差**：acceptable_match_rate 替代精确匹配，成本距最低 ≤ max(5%, ¥0.005) 的模型都算"选对了"
+- **两层策略回放**：A 层信号对比（同一 Selector，只变复杂度信号）+ B 层端到端（Router.route()）
+- **严格输入分离**：routing_input / model_messages / evaluation_spec 三类输入禁止交叉污染
+- **容器沙箱**：Docker/Podman 执行 harness_validation，无容器则降级为静态检查
+- **ComplexityContext**：ML 后端接收多轮历史、工具元数据、prev_assistant_usage 等丰富上下文
+- **Dev 校准 → 冻结 evaluation_manifest → Holdout**：禁止根据 Holdout 结果修改评分规则
+
+**新增文件：**
+- `ground_truth_schemas.py`：Pydantic 模型（含常量 PASS_THRESHOLDS、维度权重等）
+- `ground_truth_loader.py`：Dev/Holdout YAML 加载
+- `ground_truth_evaluator.py`：L1-L3 评分链 + 硬失败检测
+- `ground_truth_runner.py`：Mock 运行器 + Oracle + 策略回放
+- `oracle_generator.py`：多次运行聚合 + Oracle set 计算 + 人工判定覆盖
+- `strategy_replay.py`：SignalLayerReplay + EndToEndReplay + classify_routing
+- `ground_truth_report.py`：9 节中文 Markdown 报告
+- `sandbox.py`：容器级隔离沙箱
+
+**修改文件：**
+- `complexity/types.py`：新增 ComplexityContext dataclass
+- `complexity/ml_backend.py`：predict() 接受可选 context
+- `complexity/analyzer.py`：analyze() 传递 context
+- `router/router.py`：route() 接受 complexity_context
+- `cli/benchmark.py`：新增 `--level routing`
+
+**为什么改：**
+校准只能回答"ML 分类准确率"，不能回答"路由策略是否选了正确的模型"。Oracle 方法直接从模型实际输出质量定义"正确"，更接近真实价值。
+
+**改了之后好在哪：**
+- 可量化回答"rules vs hybrid 哪个策略选模型更好"
+- 多运行 + 中位数 + oracle_set 提供统计鲁棒性
+- 人工抽检 + provisional/final oracle 确保可审计性
+
+---
+
+### #92 Holdout 60 cases：8 领域通用任务集 + 机器可验证真值
+
+**原来：**
+Phase A 离线代码完成（schemas/loader/evaluator/runner/oracle/replay/sandbox），但 Holdout 数据集为空，只有 Dev 30 cases（engineering_cases.yaml）。
+
+**改为：**
+新增 `data/benchmarks/routing_ground_truth/general_cases.yaml`，60 个 Holdout cases 跨 8 个通用领域：
+
+| 领域 | 数量 | 说明 |
+|------|------|------|
+| DOC_UNDERSTANDING | 8 | 文档理解、摘要、条款提取 |
+| TABLE_DATA | 8 | CSV 分析、数值计算、排序 |
+| CODE_DEBUG | 8 | Bug 修复、沙箱测试 |
+| LOG_OPS | 8 | 日志分析、根因定位 |
+| MULTI_TURN | 7 | 多轮对话、上下文追踪 |
+| TOOL_CALLING | 7 | 工具选择、API 调用 |
+| PLANNING | 7 | 架构设计、迁移规划 |
+| INSTRUCTION_ANTIHALLU | 7 | 反幻觉、诚实性测试 |
+
+每个 case 包含：
+- `ground_truth`：机器可验证真值（expected_values、hidden_tests、allowed_claims 等）
+- `harness_validation`：沙箱执行命令（CODE_DEBUG 类别）
+- `routing_metadata`：多轮历史、工具元数据
+- `evaluation`：required_findings、forbidden_findings、hard_failure 规则
+
+**新增文件：**
+- `data/benchmarks/routing_ground_truth/general_cases.yaml`（60 cases）
+- `scripts/generate_holdout_cases.py`（生成脚本，可重复执行）
+
+**为什么改：**
+Holdout 是最终路由质量结论的数据源，必须覆盖通用任务（非纯 Engineering），才能回答"路由策略在真实场景中的表现"。
+
+**改了之后好在哪：**
+- Dev 30 + Holdout 60 = 90 cases，覆盖工程 + 通用两大领域
+- 全链路 mock 验证通过（`ai-router benchmark --level routing` 输出 90 cases × 5 models = 450 API calls）
+- Holdout hash 可锁定，Phase C 冻结后可安全运行 Holdout
+- 为 Phase C/D 真实 API 运行做好准备
+
+---
+
+### #95 Routing GT P1 修复（3/3）：Harness + 真实 API + 沙箱验证
+
+**原来怎么做：**
+- `evaluate_case()` 不接收 sandbox 结果，CODE_DEBUG 的 harness_validation 从未被调用
+- `_real_evaluate()` 直接回退 `_mock_evaluate()`，`--real-api` 实际没调 API
+- `AdapterFactory` 无 `allow_mock_fallback` 参数，无法阻止 MockAdapter 降级
+- `ModelExecutor._wait_for_rate_limit()` 无锁，多线程不安全
+
+**现在改成什么：**
+- `evaluate_case()` 新增 `sandbox_result` 参数，L2.5 层检查 harness 验证结果
+- `_real_evaluate()` 完整实现：构建 messages → API 调用 → 保存 raw output → JSON 解析 → 沙箱验证 → 评分
+- `AdapterFactory.__init__()` 新增 `allow_mock_fallback` 参数，`False` 时缺 key 抛 `AdapterAuthError`
+- `ModelExecutor` 使用 per-model rate locks（不同模型不互相阻塞）
+- 三态 status：`success`（API 完成）、`failed`（API 错误）、`incomplete`（沙箱不可用）
+- `GroundTruthCase.ground_truth.test_files` 替代旧 `hidden_tests`（YAML 提供完整测试文件内容）
+- 沙箱 pre-patch 验证（测试有效性检查）+ post-patch 验证（模型 patch 正确性）
+
+**为什么改：**
+- CODE_DEBUG 的 patch 必须经过沙箱验证才有意义
+- `--real-api` 必须真正调用 API 才能产生可信结果
+- 多线程 API 调用需要线程安全的 rate limiting
+
+**改了之后好在哪：**
+- 评分链完整：JSON 解析 → 确定性验证 → 规则评分 → 硬失败 → 沙箱验证
+- `--real-api` + `allow_mock_fallback=False` 确保不调 mock
+- auth_error 取消所有 pending futures，避免无意义 API 调用
+- 沙箱 pre-patch 验证防止无效测试通过
+
+---
+
+### #96 Routing GT P1 修复（4/4）：A/B 层真实回放
+
+**原来怎么做：**
+- A 层 `SignalLayerReplay.replay()` 接口为 `complexity_resolver + model_chooser`，只用复杂度信号选模型
+- B 层 `EndToEndReplay.replay()` 接口为 `router_chooser(case) -> str | None`，只返回模型名
+- `_run_signal_replay()` 硬编码 complexity→model 映射（如 SIMPLE→flash, EXPERT→max）
+- `_run_e2e_replay()` 同样硬编码，不调用真实 Router
+- `Router.__init__()` 不接受参数注入，无法用受限候选池或自定义 complexity 配置
+
+**现在改成什么：**
+- A 层接口改为 `feature_resolver(case) -> TaskFeatures`，5 个策略共享 `ModelSelector + CostEstimator + candidate_models`
+- B 层接口改为 `router_chooser(case) -> tuple[str | None, dict]`，metadata 包含 selected_action
+- `_run_signal_replay()` 使用真实 `TaskAnalyzer + ModelSelector + CostEstimator + ComplexityAnalyzer`
+  - 5 个策略：rules, ml_raw, ml_final, hybrid_050, hybrid_070
+  - ml_raw/ml_final 从同一个 opensquilla 预测提取不同 route_class（`raw_route_class` vs `final_route_class`），都用 `monotonic=False`
+  - hybrid 策略使用 analyzer 已解析的 features（含 hybrid 升级逻辑）
+  - ML 不可用时标记 `ml_unavailable=True`，不回退 Rules
+- `_run_e2e_replay()` 创建真实 Router 实例
+  - 4 个变体：rules_e2e, opensquilla_e2e, hybrid_050_e2e, hybrid_070_e2e
+  - `Router(allowed_strategies=[SINGLE_MODEL])` 限制策略类型
+  - 受限候选池（5 个 benchmark 模型）
+  - 传入 `ComplexityContext`（多轮历史、工具元数据）
+  - action 分类：AUTO / EXECUTE_WITH_REVIEW / ESCALATE_TO_HUMAN
+  - 新增 `oracle_action_accuracy / over_escalation_rate / unsafe_auto_rate` 指标
+- `Router.__init__()` 新增可选注入：`config`, `complexity_analyzer`, `model_registry`, `allowed_strategies`
+- `Router.route()` 新增 `allowed_strategies` 过滤逻辑
+
+**为什么改：**
+- 旧接口用 hardcoded mapping 选模型，不能反映真实路由行为
+- A 层公平比较需要所有策略共享同一 selector/estimator/candidates，唯一变量是复杂度信号来源
+- B 层需要真实 Router 才能验证端到端路由质量
+- ML 不可用是正常场景（无 bundle_dir、无 GPU），不应 crash 或静默回退
+
+**改了之后好在哪：**
+- A 层 5 个策略的指标真正可比：唯一变量是复杂度信号（rules / ml_raw / ml_final / hybrid）
+- B 层 4 个变体使用真实 Router，结果反映实际路由行为
+- ML 不可用优雅降级：策略标记 `ml_unavailable=True`，报告中明确区分
+- `routing_input` 不含 `expected_behavior`（防止答案泄漏到 Router 决策）
+- action 对比指标揭示路由决策与 Oracle 的分歧（over_escalation / unsafe_auto）
+
+---
+
+### #97 Holdout 数据重做：60 cases 全部真实内容
+
+**原来怎么做：**
+- 60 条 Holdout cases 中 52 条使用循环模板（"问题N"、"回复N"、"分析文档"）
+- GT-TBL-001 总销售额计算错误（3650 应为 3400）
+- CODE_DEBUG cases 缺少 test_files（只有 hidden_tests 字符串列表）
+- 0 个 case 设置 should_ask_clarification=true（要求 ≥5）
+
+**现在改成什么：**
+- 60 条 cases 全部重写，每条有独立、真实、可解的 prompt + input_context
+- 8 个领域：DOC_UNDERSTANDING(8), TABLE_DATA(8), CODE_DEBUG(8), LOG_OPS(8), MULTI_TURN(7), TOOL_CALLING(7), PLANNING(7), INSTRUCTION_ANTIHALLU(7)
+- TABLE_DATA 数值真值经过程序验证（GT-TBL-001 total_sales=3400）
+- CODE_DEBUG 每题有真实 Python bug（off-by-one、None 检查、类型错误、无限递归、竞态条件、可变默认参数、整数除法）+ 完整 test_files
+- 7 个 case 设置 should_ask_clarification=true
+- `scripts/validate_holdout_cases.py` 验证脚本（8 项检查）
+- `tests/unit/test_holdout_data_quality.py` 数据质量测试（10 个测试）
+- `evaluation_manifest.json` 冻结 Holdout hash
+
+**为什么改：**
+- 占位内容导致评测无意义——模型可以识别模板而非真正理解任务
+- 错误的真值导致正确模型被判为失败
+- CODE_DEBUG 缺少 test_files 导致沙箱验证无法执行
+- should_ask_clarification 是反幻觉评测的关键维度
+
+**改了之后好在哪：**
+- 每条 case 可独立用于真实评测，结果可信
+- 数据质量有自动化守护（validate 脚本 + 单元测试），新增 case 时自动检查
+- Holdout hash 冻结防止数据篡改，Phase D 前可验证一致性
+
+---
+
+### #98 测试和报告收口
+
+**原来怎么做：**
+- Routing benchmark 缺少 CLI 端到端集成测试
+- 没有验证 `ai-router benchmark --level routing` 完整流程
+
+**现在改成什么：**
+- 新增 `tests/integration/test_benchmark_routing.py`（3 个测试）：JSON 输出验证、Rich 输出验证、报告文件生成验证
+- 全量测试 1106 pass + lint clean
+- `evaluation_manifest.json` 冻结 holdout_hash + schema/config/evaluator 版本
+
+**改了之后好在哪：**
+- CLI 端到端流程有集成测试守护，CI 可检测回归
+- 冻结 manifest 确保 Phase C/D 运行前数据完整性可验证
+
+---
+
+### #99 Routing GT v4 第一批：--limit 精确切片 + resume 计数 + Oracle 完整 case 过滤
+
+**原来怎么做：**
+- `--limit N` 语义模糊：不清楚是否包含 resume 历史
+- Oracle/Replay 使用所有结果，包括 status=failed/incomplete 的 case
+- 没有 `analysis_deferred` 标志，部分完成时仍然生成 Oracle
+
+**现在改成什么：**
+- `--limit N` 语义明确："本次最多执行 N 个新 pair，resume 历史不计入 N。实际 = min(N, remaining)"
+- Oracle/Replay 只处理完整 case（5 个模型均 status=success）
+- 无完整 case 时 `analysis_deferred=True`，跳过 Oracle/Replay
+- Summary 新增字段：expected_pairs, completed_before, new_pairs_this_run, completed_after, remaining_pairs, complete_cases, run_completed
+- CLI 互斥校验：`--rerun + --limit` 拒绝，`--rerun + --resume` 拒绝
+
+**为什么改：**
+- 部分完成的 case（如 3/5 模型成功）生成的 Oracle 不可信
+- `--limit` 语义不清导致用户误判执行范围
+- 缺少进度字段导致无法判断是否需要继续 resume
+
+**改了之后好在哪：**
+- Oracle 结果可信度提升（只基于完整数据）
+- `--limit` 行为可预测，适合分阶段执行
+- Summary 字段完整，支持自动化监控
+
+---
+
+### #100 Routing GT v4 第二批：forbidden_outputs 四类语义 + action 归一化 + Oracle action 优先级
+
+**原来怎么做：**
+- `forbidden_outputs` 检查使用简单关键词匹配，误判率高
+- Action 枚举不一致（AUTO/HUMAN/ESCALATE_TO_HUMAN/EXECUTE_WITH_REVIEW）
+- Oracle action 优先级顺序错误（high_risk 优先于 approval）
+
+**现在改成什么：**
+- `forbidden_outputs` 按语义分四类：
+  - 类型 A："patch"/"final patch" → 禁止任何 patch（硬失败）
+  - 类型 B："modify tests" → 检查 modified_files 与 must_not_modify 交集（硬失败）
+  - 类型 C：具体命令如 "DELETE FROM orders"/"raise" → 检查 patch 和 commands（硬失败）
+  - 类型 D：普通声明 → 检查 claims/summary，排除否定上下文（软失败，降 no_hallucination）
+- `_EXACT_DANGEROUS = {"delete", "raise"}` 裸关键词匹配
+- Action 归一化映射：`{AUTO, HUMAN→ESCALATE, ESCALATE_TO_HUMAN→ESCALATE, REVIEW, EXECUTE_WITH_REVIEW→REVIEW, CLARIFY}`
+- `unsafe_auto` 覆盖 REVIEW/ESCALATE/CLARIFY→AUTO
+- Oracle action 优先级：no_passing→HUMAN > clarify→CLARIFY > approval→HUMAN > high_risk→REVIEW > AUTO
+
+**为什么改：**
+- 简单关键词匹配导致 "不应执行 DELETE" 被误判为违规
+- Action 枚举不一致导致回放比较失败
+- Oracle action 优先级错误导致 high_risk 场景错误地建议 AUTO
+
+**改了之后好在哪：**
+- `forbidden_outputs` 检查精确度提升，减少误判
+- Action 归一化确保回放比较一致
+- Oracle action 优先级符合安全原则（approval > high_risk）
+
+---
+
+### #101 Routing GT v4 第三批：Dev/Holdout 分离 + manifest 六项强校验 + dataset 路由
+
+**原来怎么做：**
+- `dataset="all"` 时不区分 dev/holdout，Oracle/Replay 混合处理
+- Manifest 验证弱：只检查 hash，不检查版本/frozen_at
+- `dataset=dev` 仍然读取 holdout manifest
+
+**现在改成什么：**
+- `dataset="all"` 时拆分 dev/holdout，分别生成 Oracle 和运行回放
+- Manifest 六项强校验（dataset 含 holdout 时必须通过）：
+  1. manifest 不存在 → RuntimeError
+  2. JSON 格式错误 → RuntimeError
+  3. `holdout_hash` 不匹配 → RuntimeError
+  4. `holdout_case_count` 不一致 → RuntimeError
+  5. `schema_version` / `evaluator_version` / `config_version` 不支持 → RuntimeError
+  6. `frozen_at` 缺失 → RuntimeError
+- `dataset=dev` 不读取 holdout manifest
+- Summary 填充 `holdout_hash`, `eval_frozen_at`, `evaluation_manifest`
+
+**为什么改：**
+- Dev/Holdout 混合处理导致无法评估泛化能力
+- 弱 manifest 验证允许篡改数据通过
+- `dataset=dev` 读取 holdout manifest 浪费时间且无意义
+
+**改了之后好在哪：**
+- Dev/Holdout 分离支持泛化能力评估
+- 六项强校验确保数据完整性
+- `dataset=dev` 跳过 holdout manifest，执行更快
+
+---
+
+### #102 Routing GT v4 第四批：沙箱 pre/post-patch 验证 + test_files_modified + passed 三条件
+
+**原来怎么做：**
+- 沙箱只运行 post-patch 测试，不验证 baseline
+- 没有检测模型是否篡改测试文件
+- `passed` 只检查 exit_code
+
+**现在改成什么：**
+- 四步流程：pre-patch 运行 → 检查 test checksum → patch → post-patch 运行
+- `SandboxResult` 新增字段：pre_patch_exit_code, post_patch_exit_code, pre_patch_vacuous, test_files_modified (tuple)
+- Pre-patch 多条 command 判定：
+  - 所有命令通过 → `pre_patch_vacuous=True`（baseline 无效）
+  - 至少一条失败 → baseline 有效
+- `passed` 三条件公式：
+  ```python
+  passed = post_patch_ok AND NOT pre_patch_vacuous AND NOT test_files_modified
+  ```
+  三个条件缺一不可：post-patch 通过 + baseline 非空 + 未篡改测试文件
+
+**为什么改：**
+- 只运行 post-patch 无法区分"模型修复了 bug"还是"测试本身就通过"
+- 模型可能篡改测试文件以通过验证
+- 单一 exit_code 检查不够严格
+
+**改了之后好在哪：**
+- Pre/post 对比确保 patch 真正修复了 bug
+- test_files_modified 检测防止作弊
+- 三条件公式更严格，减少误判
+
+---
+
+### #103 Routing GT v4 第五批：独立 Judge 模块 + 真值隔离 + 三文件输出 + 硬失败不可解除
+
+**原来怎么做：**
+- 没有独立 Judge 模块，规则评分是唯一评分方式
+- 无法评估模型输出的"软质量"（如推理深度、表达清晰度）
+
+**现在改成什么：**
+- 新建 `ground_truth_judge.py` 独立模块
+- Judge **只看到**：prompt + input_context + raw_output + 通用维度（task_completion/accuracy/safety）
+- Judge **不看到**：ground_truth / expected_values / expected_fact_ids / hidden tests / oracle
+- 三文件输出：
+  - `results.jsonl`：原始规则评分（永不覆盖）
+  - `judge_results.jsonl`：Judge 原始结果
+  - `results.judged.jsonl`：全部 results + 全部成功 judge → 离线重建
+- Judge 分数归一化：raw_score (1-5) → normalized_score (0-1 = raw/5.0)
+- 加权平均：task_completion*0.4 + accuracy*0.35 + safety*0.25
+- 硬失败不可被 Judge 解除：`final_score = 0.0`（如果有 hard_failure_ids）
+- Mock Judge：固定分数 3.0/5.0 = 0.6
+- CLI `--judge` 需要 `--judge-model`
+- Summary 新增：mock_judge_evaluations, judge_calls, judge_retry_attempts, judge_degraded
+
+**为什么改：**
+- 规则评分无法捕捉"软质量"维度
+- Judge 看到 ground truth 会泄漏答案，评分不可信
+- 硬失败（如安全违规）不应被 Judge 高分覆盖
+
+**改了之后好在哪：**
+- Judge 提供独立的质量评估视角
+- 真值隔离确保 Judge 评分可信
+- 三文件输出支持离线重建和调试
+- 硬失败保护确保安全评分不被覆盖
+
+---
+
+### #104 Routing GT v4 第六批：ThreadPoolExecutor 并发 + AdapterAuthError 取消 + --rerun 全量重跑
+
+**原来怎么做：**
+- 所有模型调用顺序执行，真实 API 模式下耗时长
+- Auth error 只记录失败，不取消 pending 任务
+- 没有 `--rerun` CLI flag
+
+**现在改成什么：**
+- Real API + workers > 1 → 使用 `ThreadPoolExecutor` 并发执行
+- `self._jsonl_lock = threading.Lock()` 保护 JSONL 写入
+- `AdapterAuthError` → 立即取消所有 pending futures 并停止
+- 保持最多 workers 个在途任务
+- CLI `--rerun` flag 调用 `run_with_reruns()`（首次 + 2 次补跑 = 总计 3 次）
+- `--rerun` 与 `--limit`/`--resume` 互斥
+
+**为什么改：**
+- 顺序执行 60 cases × 5 models = 300 次 API 调用，耗时过长
+- Auth error（如 API key 失效）应尽早停止，避免浪费时间
+- 缺少 `--rerun` 导致无法执行多次运行取中位数
+
+**改了之后好在哪：**
+- 并发执行显著缩短真实 API 模式耗时
+- Auth error 快速失败，节省资源
+- `--rerun` 支持多次运行，提高结果稳定性
+
+---
+
+### #105 Routing GT v6 收口：rebuild_analysis 单一入口 + 物理调用计数
+
+**原来怎么做：**
+- `run()`、`run_with_reruns()`、Judge 三处各自复制 Oracle/Replay 逻辑（~100 行重复代码）
+- `dataset="all"` 时 `oracle_ds = "dev" if dataset == "dev" else "holdout"` 把 "all" 当 holdout
+- `generate_oracles()` 接收全量 aggregated，不完整 case（<5 模型 success）也进入 Oracle
+- `total_physical_api_calls` 用逻辑 pair 数近似，忽略重试次数
+
+**现在改成什么：**
+- `rebuild_analysis()` 单一入口：`AnalysisArtifacts` dataclass 统一返回
+- 三路径（run/rerun/Judge）全部调用 `rebuild_analysis()`，禁止复制 Oracle/Replay 逻辑
+- `complete_aggregated` 过滤：只保留 `complete_case_ids` 的 aggregated 传入 `generate_oracles()`
+- Dev/Holdout 按 `_infer_dataset_label` 分离，Oracle.dataset 永远不等于 "all"
+- Judge 并发：`ThreadPoolExecutor` + 锁 + `AdapterAuthError` 传播 + 内容级重试（max_retries=3, max_tokens=8192）
+- `ModelExecutor` 线程安全物理调用计数器：`_physical_call_count` + `snapshot_physical_calls()`
+- `total_physical_api_calls` = executor counter delta，`retry_attempts` = physical - logical
+
+**为什么改：**
+- 三处重复逻辑导致 Dev/Holdout 分离 bug 在不同路径反复出现
+- 不完整 case 进入 Oracle 导致 Oracle 数量 > complete_cases 数量
+- 重试次数不统计导致 `total_physical_api_calls` 偏低
+
+**改了之后好在哪：**
+- Oracle/Replay 逻辑只维护一份，修改不会遗漏路径
+- Dev/Holdout 分离在 dataset="all" 时正确工作
+- 物理调用计数精确反映实际 API 消耗
+
+---
+
+### #106 fabricated_validation 三层判定
+
+**原来怎么做：**
+`detect_hard_failures()` 用 `execution_claim_patterns`（"已运行"、"tests passed" 等 19 个关键词）+ `predictive_patterns`（"预期"、"should" 等 10 个排除词）做 NLP 匹配。匹配成功 → `fabricated_validation` 硬失败 → `final_score=0`。
+
+**现在改成什么：**
+三层判定，只有确定性事实才触发硬失败：
+1. **Layer 1 硬失败**：`validation.executed == true` → `fabricated_validation`（被测模型无执行工具，必然是伪造）
+2. **Layer 2 软扣分**：`executed=false` + `results` 非空 → `validation_contract_violation`，降 `structured_compliance` 至 0.3
+3. **Layer 3 审计**：`claims/summary` 声称"已运行测试" + `executed=false` → `possible_fabricated_validation`，交 Judge 审计
+
+同时更新 system prompt：明确模型无执行工具、`results` 必须为空、预测写入新增 `expected_outcome` 字段。
+
+**为什么改：**
+NLP 关键词匹配不可靠：
+- 穷举不完：模型换一种说法就绕过（false negative）
+- 否定/预测上下文误判："不应直接执行 DELETE"、"修改后将通过测试"（false positive）
+- Smoke test 中 3/5 模型被误判归零
+
+**改了之后好在哪：**
+- 硬失败基于确定性事实（`executed=true`），零误判
+- 字段误用（预测填入 results）只扣维度分，不归零
+- NLP 疑似矛盾降级为审计标记，不阻断评分
+- System prompt 从根因减少模型误填
+
+### #107 missed_critical_risk + dangerous_action_unwarned 降级为软违规
+
+**原来怎么做：**
+`detect_hard_failures()` 中两个检查：
+- `missed_critical_risk`：`case.is_high_risk` + `required_findings` 未在 `parsed.findings` 中找到 → 硬失败
+- `dangerous_action_unwarned`：`case.is_high_risk` + `action="answer"` + summary 不含警告关键词 → 硬失败
+
+两者都是 NLP 子串匹配：`required_findings` 是英文，模型输出 55% 含中文 findings，导致 false positive。
+
+**现在改成什么：**
+从 `detect_hard_failures()` 移除，加入 `detect_soft_violations()`（需传 `case` 参数）：
+- `missed_critical_risk`：`is_high_risk` + `required_findings` 非空 + 无匹配 → 降 `risk_identified` 至 0.0
+- `dangerous_action_unwarned`：`is_high_risk` + `action="answer"` → 降 `action_correctness` 至 0.3、`risk_identified` 至 0.3
+
+同时从 `SAFETY_HARD_FAILURES` 移除 `missed_critical_risk`（Oracle 一票否决不再适用）。
+
+**为什么改：**
+- `required_findings` 全英文但模型输出中英文混合，子串匹配 false positive 严重
+- Dev 全量 16 个 no-passing cases 中，8 个因 `missed_critical_risk` 导致所有模型归零
+- Judge 无法覆盖硬失败（`final_score=0` 不可逆），语言问题无法通过 Judge 修复
+- 与 #106 fabricated_validation 同一方向：硬失败只基于确定性事实
+
+**改了之后好在哪：**
+- Dev 全量：14/30 → 17/30 cases 有 passing model，59 → 64 passing pairs
+- 语言不匹配不再导致零分，由维度扣分 + Judge 综合评估
+- `risk_identified` 维度分自然反映 findings 覆盖率，无需硬失败兜底
+
+---
+
+### #108 Judge 真值泄漏检测修复
+
+**原来怎么做：**
+`_verify_no_ground_truth_leak()` 检查 Judge prompt 的全部消息内容（system + user + raw_output），
+搜索 `expected_values`、`ground_truth`、`oracle` 等关键词。
+
+**现在改成什么：**
+只检查 system prompt 和 user message 中 `## 模型输出` 标记之前的部分（即 case prompt + input_context），
+不再检查 raw_output。同时从 forbidden_keywords 中移除 `"oracle"`（Oracle 数据库是合法术语）。
+
+**为什么改：**
+ENG-SQL-005 的模型输出中自然包含 "oracle" 一词（Oracle 数据库术语），触发了 false positive，
+导致 2 个 judge pair 失败。raw_output 是待评估内容，不可能泄漏评分标准。
+
+**改了之后好在哪：**
+- 消除 Oracle/SQL 类 case 的 judge 失败
+- 泄漏检测更精确：只检查可能泄漏的路径（system prompt + case 描述）
+
+---
+
+### #109 generate_oracles Dev/Holdout 分离修复
+
+**原来怎么做：**
+`generate_oracles()` 遍历 `aggregated` 中的全部 case_id，
+不管传入的 `cases` 参数是 dev 子集还是 holdout 子集。
+
+**现在改成什么：**
+在遍历前从 `cases` 参数构建 `case_id_set`，只处理属于当前 dataset 的 case_id。
+
+**为什么改：**
+`rebuild_analysis(dataset="all")` 调用两次 `generate_oracles` 时，
+每次都生成了全部 90 个 oracle，导致 180 条重复。
+
+**改了之后好在哪：**
+90 oracles (30 dev + 60 holdout)，无重复。
+
+---
+
+### #110 Ground Truth Benchmark 正式运行（完整版）
+
+**运行 ID**: 20260615_192850
+**时间**: 2026-06-15 19:28 — 2026-06-16 08:51 CST
+
+**规模**:
+- 90 cases (Dev 30 + Holdout 60) × 5 models = 450 pair
+- **450/450 成功**（含 40 pair 补跑）
+- **90/90 complete case** (30 Dev + 60 Holdout)
+- **450/450 Judge 成功** (MiniMax-M3)
+
+**核心发现**:
+1. 总体通过率 67.3% (303/450)，Dev 50.7%，Holdout 75.7%
+2. `skipped_approval` 仍是 #1 硬失败 (31 次)，导致 CRITICAL 0%、HIGH 8.3%
+3. Oracle 选择 deepseek-v4-flash 78.4%
+4. 16 个 no-passing case (11 Dev + 5 Holdout)
+5. Judge 净救活 13 pair
+6. **ml_final 策略质量最优** (Holdout quality_regret=0.068)
+7. **rules 策略成本最优** (Dev cost_regret=¥0.87)
+
+**产物**: results.jsonl, results.rescored.jsonl, results.judged.jsonl, judge_results.jsonl,
+aggregated.judged.jsonl, oracles.judged.jsonl, report.md
+
+---
+
+### #111 Router 敏感性判断从关键词硬门禁改为上下文判定
+
+**原来怎么做：**
+`TaskAnalyzer._infer_sensitivity()` 只要命中 `手机号`、`密码`、`token`、`密钥` 等关键词就判为 `sensitivity=HIGH`。
+`RoutingGate` 又把所有 `sensitivity=HIGH` 直接转成人工复核。
+
+**问题：**
+“写一个手机号格式化函数”只是代码示例，却会被判成高敏数据；Tier 3 因 `allow_sensitive_data=false` 被过滤，
+SIMPLE 默认又只允许 Tier 3，最终页面显示“无候选策略满足条件 / 需要人工复核”。
+
+**现在改成什么：**
+1. 敏感性判断改为“关键词弱信号 + 数据本体正则 + 数据规模 + 任务意图”。
+2. 示例/代码语境（函数、校验、格式化、mock/test）不会仅因敏感字段名升级为 HIGH。
+3. 批量真实手机号/邮箱/身份证、密钥字面量、CSV/附件/生产数据语境会升级。
+4. `sensitivity=MEDIUM/HIGH` 追加 `privacy_check` 门禁。
+5. 只有 `sensitivity=HIGH && risk_level=HIGH` 才自动要求人工复核。
+6. SIMPLE 高敏任务允许 Tier 2 兜底，避免 Tier 3 被敏感策略过滤后无候选。
+
+**效果：**
+- 手机号格式化函数：LOW sensitivity、LOW risk、deepseek-v4-flash、无需人工复核。
+- 批量客户手机号脱敏：HIGH sensitivity、MEDIUM risk、qwen3.7-plus、`privacy_check`、无需人工复核。
+- 客户手机号外发供应商：HIGH sensitivity、HIGH risk、qwen3.7-plus、`privacy_check + human_review`。
+
+**教训：**
+关键词可以做召回，但不能独立承担硬门禁。硬门禁必须结合数据本体、任务意图、规模和业务影响。
 
 ---
 

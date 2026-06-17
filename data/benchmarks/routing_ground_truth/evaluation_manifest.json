@@ -1,0 +1,11 @@
+{
+  "frozen_at": "2026-06-14T00:00:00Z",
+  "holdout_hash": "sha256:36722949570bea918a60744fd20d410f6184226b1d04992868f1a75d59f1d190",
+  "holdout_file": "data/benchmarks/routing_ground_truth/general_cases.yaml",
+  "holdout_case_count": 60,
+  "schema_version": "1.0",
+  "evaluator_version": "1.0",
+  "config_version": "1.0",
+  "dev_results_hash": null,
+  "notes": "Phase C 前冻结 Holdout hash + schema/config/evaluator 版本。Phase C 完成后追加 dev_results_hash。"
+}
