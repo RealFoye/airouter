@@ -96,6 +96,18 @@ def test_phone_formatter_example_is_not_high_sensitivity(analyzer: TaskAnalyzer)
     assert features.risk_level == RiskLevel.LOW
 
 
+def test_build_chatbot_is_code_generation(analyzer: TaskAnalyzer):
+    features = analyzer.extract_features(
+        "帮我模仿DeepSeek的网页端做一个chatbot，API Key由前端用户自己输入。"
+    )
+    assert features.category == TaskCategory.CODE_GENERATION
+
+
+def test_explain_frontend_backend_is_conversation(analyzer: TaskAnalyzer):
+    features = analyzer.extract_features("解释网页前端和后端的区别")
+    assert features.category == TaskCategory.CONVERSATION
+
+
 def test_batch_customer_phone_data_is_high_sensitivity(analyzer: TaskAnalyzer):
     features = analyzer.extract_features(
         "请把以下客户手机号批量脱敏：13812345678、13912345678、18812345678。"

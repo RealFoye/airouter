@@ -12,6 +12,7 @@ from airouter.adapters.base import AdapterResponse, BaseAdapter
 from airouter.adapters.factory import AdapterFactory
 from airouter.config import ModelEntry
 from airouter.engine.agent.goal import ExecutionGoal, GoalBuilder
+from airouter.engine.agent.loop import LoopConfig, run_agent_loop
 from airouter.engine.agent.report import CostSummary, ExecutionReport
 from airouter.engine.agent.safety import SafetyGate
 from airouter.engine.agent.text_parser import TEXT_TOOL_SYSTEM_PROMPT, TextToolParser
@@ -45,19 +46,31 @@ AGENT_SYSTEM_PROMPT = """你是 AirRouter 智能执行助手。你通过工具�
 - read_file(path, offset?, limit?): 读取文件内容。修改前必须先读取。
 - write_file(path, content): 创建或覆盖文件（自动备份）。
 - edit_file(path, old_text, new_text): 精确替换文件中的文本。
-- run_command(command): 执行安全命令（仅 pytest/ruff/git/ls 等）。
+- run_command(command): 执行受控开发命令，支持 Python/Node 测试、依赖安装、构建、lint、类型检查和只读诊断。
+
+## 工具调用边界（必须遵守）
+- 工具已经在工作目录中运行，所有文件路径必须使用相对路径；查看当前目录用 `ls -la`，不要重复写工作目录的绝对路径。
+- 不要使用 `python -c` / `python3 -c`、Shell 重定向或 `&&` / `||` / `;` / `|` 串联命令。
+- 需要多个检查时，分别调用多次 run_command；不要把它们拼成一条命令。
+- 不允许删除文件、危险 Git 操作、系统权限修改或启动长期运行服务。
+
+## 高效探索（节省轮次，非常重要）
+- 第一步：用 run_command("find . -name '*.py' -not -path './.venv/*'") 快速列出所有 Python 文件
+- 第二步：根据任务关键词，只 read_file 直接相关的文件，不要逐个读目录下的所有文件
+- 如果任务提到具体文件名（如 auth.py），直接 read_file 该文件，不要先探索目录
+- 不要读测试文件，除非任务明确要求修改测试
 
 ## 工作原则
-1. 先探索再修改：先用 ls 和 read_file 了解项目结构，再动手修改
+1. 先探索再修改：用 find 命令了解结构，只读必要文件
 2. 先读后改：修改任何文件前必须先 read_file 查看完整内容
-3. 改完验证：修改代码后必须 run_command("pytest ...") 验证
+3. 改完验证：修改代码后使用项目已有的测试、lint、类型检查或构建命令验证
 4. 精确修改：优先使用 edit_file（只改需要改的），避免 write_file 覆盖全文件
 5. 不做超出范围的事：只完成用户要求的任务
 6. 不确定就停：如果遇到不确定的情况，说明原因并停止
 
 ## 项目结构提示
 常见项目结构：src/ 目录下是源码，tests/ 目录下是测试。
-如果不确定文件位置，先 run_command("ls -R .") 或 run_command("ls src/") 探索。
+如果不确定文件位置，先 run_command("find . -name '*.py'") 快速定位。
 
 ## 任务信息
 - 任务类型: {category}
@@ -199,28 +212,12 @@ class AgentExecutor:
     def _run_single_agent(
         self, goal: ExecutionGoal, decision: RoutingDecision, start_time: float
     ) -> ExecutionReport:
-        """单模型 Agent 执行循环。"""
+        """单模型 Agent 执行循环（委托给共享 run_agent_loop）。"""
         executor_name = decision.models.executor
         if not executor_name:
             raise ValueError("RoutingDecision 未指定 executor 模型")
 
         adapter, model_entry = self._get_adapter(executor_name)
-        safety = SafetyGate(goal.constraints.workdir)
-        tool_exec = ToolExecutor(
-            goal.constraints.workdir,
-            safety,
-            allowed_tools=goal.constraints.allowed_tools,
-        )
-        cost = CostSummary()
-
-        # 过滤工具定义：模型不该看到不允许的工具
-        if goal.constraints.allowed_tools is not None:
-            filtered_tools = [
-                t for t in TOOL_DEFINITIONS
-                if t["function"]["name"] in goal.constraints.allowed_tools
-            ]
-        else:
-            filtered_tools = TOOL_DEFINITIONS
 
         messages: list[dict[str, Any]] = [
             {
@@ -230,72 +227,28 @@ class AgentExecutor:
             {"role": "user", "content": goal.task},
         ]
 
-        final_response = ""
-        last_content = ""
-        turns = 0
-
-        for turn in range(goal.constraints.max_turns):
-            turns = turn + 1
-            logger.info("Turn %d/%d, 调用 %s", turns, goal.constraints.max_turns, model_entry.name)
-
-            response = adapter.chat(
-                model_entry.name,
-                messages,
-                tools=filtered_tools,
-                tool_choice="auto",
-            )
-
-            cost.record(model_entry, response)
-
-            # 始终记录最新的 content
-            if response.content:
-                last_content = response.content
-
-            # 提取工具调用（支持 function calling 和文本 fallback）
-            tool_calls = self._extract_tool_calls(response)
-
-            # 构建 assistant message
-            msg: dict[str, Any] = {"role": "assistant", "content": response.content or ""}
-            if tool_calls:
-                msg["tool_calls"] = tool_calls
-            messages.append(msg)
-
-            # 没有 tool_calls → 任务完成
-            if not tool_calls:
-                final_response = response.content or ""
-                break
-
-            # 检查成本上限
-            if cost.total_cost_cny >= goal.constraints.max_cost_cny:
-                final_response = (
-                    f"[成本上限] 已消耗 ¥{cost.total_cost_cny:.4f}，"
-                    f"超过上限 ¥{goal.constraints.max_cost_cny:.4f}，停止执行。\n\n"
-                    f"{response.content or '(无输出)'}"
-                )
-                break
-
-            # 执行工具
-            tool_results = tool_exec.execute(tool_calls)
-            messages.extend(tool_results)
-        else:
-            # max_turns 耗尽：用最后记录的 content 作为输出
-            final_response = (
-                f"[最大轮次] 已达到 {goal.constraints.max_turns} 轮上限，停止执行。\n\n"
-                f"{last_content or '(无输出)'}"
-            )
+        result = run_agent_loop(
+            adapter=adapter,
+            model_entry=model_entry,
+            messages=messages,
+            workdir=goal.constraints.workdir,
+            allowed_tools=goal.constraints.allowed_tools,
+            config=LoopConfig(
+                max_turns=goal.constraints.max_turns,
+                max_cost_cny=goal.constraints.max_cost_cny,
+            ),
+        )
 
         elapsed = time.time() - start_time
-
-        # 计算公平基线成本：用 Tier 1 最贵模型处理相同 token 量
-        agent_baseline = self._compute_agent_baseline(cost)
+        agent_baseline = self._compute_agent_baseline(result.cost)
 
         return ExecutionReport(
             goal=goal,
             decision=decision,
-            final_response=final_response,
-            tool_history=tool_exec.history,
-            cost=cost,
-            turns=turns,
+            final_response=result.final_response,
+            tool_history=result.tool_history,
+            cost=result.cost,
+            turns=result.turns,
             elapsed_seconds=elapsed,
             baseline_cost=agent_baseline,
         )

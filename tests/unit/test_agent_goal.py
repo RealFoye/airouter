@@ -109,14 +109,23 @@ class TestSuccessCriteria:
 
 
 class TestToolSelection:
-    def test_simple_low_risk_no_run_command(self, tmp_path):
+    def test_simple_low_risk_code_task_has_run_command(self, tmp_path):
         decision = _make_decision(
             category=TaskCategory.CODE_REVIEW,
             complexity=ComplexityLevel.SIMPLE,
             risk_level=RiskLevel.LOW,
         )
         goal = GoalBuilder.build(decision, "task", tmp_path)
-        assert "run_command" not in goal.constraints.allowed_tools
+        assert "run_command" in goal.constraints.allowed_tools
+
+    def test_simple_low_risk_non_engineering_task_has_safe_run_command(self, tmp_path):
+        decision = _make_decision(
+            category=TaskCategory.DOCUMENTATION,
+            complexity=ComplexityLevel.SIMPLE,
+            risk_level=RiskLevel.LOW,
+        )
+        goal = GoalBuilder.build(decision, "task", tmp_path)
+        assert "run_command" in goal.constraints.allowed_tools
 
     def test_code_gen_has_write_file(self, tmp_path):
         decision = _make_decision(

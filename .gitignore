@@ -44,3 +44,5 @@ runs/
 
 # OpenSquilla (not committed — obtained separately)
 /opensquilla/
+
+.airouter/

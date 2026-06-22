@@ -12,6 +12,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import yaml
@@ -242,12 +243,23 @@ class OpenSquillaBackend:
             raise ComplexityBackendUnavailable("request type not initialized")
 
         if context is not None:
+            # OpenSquilla 的历史特征提取器读取对象属性，而不是裸字符串。
+            # AirRouter 对外仅保存稳定的 R0-R3 标签，在适配边界补齐训练时
+            # 所需的 difficulty/margin 字段，避免多轮预测静默回退 Rules。
+            previous_decisions = [
+                SimpleNamespace(
+                    route_class=route_class,
+                    difficulty=0.0,
+                    margin=0.0,
+                )
+                for route_class in context.prev_route_decisions
+            ]
             return request_type(
                 current_user_text=task_description,
                 history_user_texts=list(context.history_user_texts),
                 prev_assistant_text=context.prev_assistant_text,
                 prev_assistant_usage=context.prev_assistant_usage,
-                prev_route_decisions=list(context.prev_route_decisions),
+                prev_route_decisions=previous_decisions,
                 flags_text_override=None,
                 context_metadata={
                     "turn_index": context.turn_index,

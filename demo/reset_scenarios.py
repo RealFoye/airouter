@@ -7,11 +7,16 @@ DEMO_DIR = Path(__file__).parent
 
 
 def reset_scenario(scenario_dir: Path) -> None:
-    """恢复单个场景的 .bak 文件。"""
+    """恢复单个场景的 .bak 或 .initial 基线文件。"""
     count = 0
     for bak in sorted(scenario_dir.rglob("*.bak")):
         original = bak.with_suffix("")  # auth.py.bak → auth.py
         shutil.copy2(bak, original)
+        print(f"  restored: {original.relative_to(DEMO_DIR)}")
+        count += 1
+    for initial in sorted(scenario_dir.rglob("*.initial")):
+        original = initial.with_suffix("")  # email_validator.py.initial → email_validator.py
+        shutil.copy2(initial, original)
         print(f"  restored: {original.relative_to(DEMO_DIR)}")
         count += 1
     if count == 0:

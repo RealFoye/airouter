@@ -83,9 +83,15 @@ class TestEditFile:
 
 
 class TestRunCommand:
-    def test_run_echo(self, executor):
-        result = executor._run_command("wc -l /dev/null")
+    def test_run_echo(self, executor, sample_file):
+        result = executor._run_command("wc -l hello.py")
         assert "exit code: 0" in result
+
+    def test_run_approved_compound_command_without_shell(self, executor):
+        result = executor._run_command("pwd && ls -la")
+        assert "$ pwd" in result
+        assert "$ ls -la" in result
+        assert result.count("exit code: 0") == 2
 
     def test_run_timeout(self, executor):
         # This should timeout quickly with sleep
@@ -119,7 +125,79 @@ class TestToolCallExecution:
             },
         }]
         results = executor.execute(tool_calls)
-        assert "解析失败" in results[0]["content"]
+        assert "工具参数不完整" in results[0]["content"]
+        assert executor.history[-1].retryable is True
+
+    def test_execute_accepts_arguments_object(self, executor, sample_file):
+        tool_calls = [{
+            "id": "call_object",
+            "type": "function",
+            "function": {
+                "name": "read_file",
+                "arguments": {"path": "hello.py"},
+            },
+        }]
+        results = executor.execute(tool_calls)
+        assert "def hello():" in results[0]["content"]
+
+    def test_approval_callback_allows_unlisted_command_once(self, tmp_path):
+        approvals = []
+        executor = ToolExecutor(
+            workdir=tmp_path,
+            safety=SafetyGate(workdir=tmp_path),
+            approval_callback=lambda name, args, reason: approvals.append(
+                (name, args, reason)
+            ) or "once",
+        )
+        tool_calls = [{
+            "id": "call_approval",
+            "type": "function",
+            "function": {
+                "name": "run_command",
+                "arguments": json.dumps({"command": "git branch --show-current"}),
+            },
+        }]
+        results = executor.execute(tool_calls)
+        assert len(approvals) == 1
+        assert "需要用户授权" not in results[0]["content"]
+
+    def test_approval_callback_denies_command(self, tmp_path):
+        executor = ToolExecutor(
+            workdir=tmp_path,
+            safety=SafetyGate(workdir=tmp_path),
+            approval_callback=lambda name, args, reason: "deny",
+        )
+        tool_calls = [{
+            "id": "call_denied",
+            "type": "function",
+            "function": {
+                "name": "run_command",
+                "arguments": json.dumps({"command": "git branch --show-current"}),
+            },
+        }]
+        results = executor.execute(tool_calls)
+        assert "用户拒绝执行" in results[0]["content"]
+
+    def test_session_approval_avoids_second_prompt(self, tmp_path):
+        approvals = []
+        executor = ToolExecutor(
+            workdir=tmp_path,
+            safety=SafetyGate(workdir=tmp_path),
+            approval_callback=lambda name, args, reason: approvals.append(reason)
+            or "session",
+        )
+        tool_call = {
+            "id": "call_session_1",
+            "type": "function",
+            "function": {
+                "name": "run_command",
+                "arguments": json.dumps({"command": "git branch --show-current"}),
+            },
+        }
+        executor.execute([tool_call])
+        tool_call["id"] = "call_session_2"
+        executor.execute([tool_call])
+        assert len(approvals) == 1
 
     def test_execute_safety_blocked(self, executor):
         tool_calls = [{

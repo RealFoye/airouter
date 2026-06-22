@@ -9,9 +9,14 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Literal
 
-from airouter.engine.agent.safety import SafetyError, SafetyGate
+from airouter.engine.agent.safety import (
+    ApprovalRequired,
+    CommandRewriteRequired,
+    SafetyError,
+    SafetyGate,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +77,12 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "run_command",
-            "description": "在安全沙箱中执行命令。仅允许白名单命令：pytest, ruff, git status/log/diff, wc, head, tail。",
+            "description": (
+                "在工作目录中执行受控开发命令。允许 Python/Node 测试与语法检查、"
+                "npm/pnpm/yarn 依赖安装和 build/lint/typecheck、Vite 脚手架、"
+                "git status/log/diff 及常用只读诊断；不允许删除文件、危险 Git、"
+                "系统权限修改、Shell 注入或长期运行服务。"
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -97,6 +107,11 @@ class ToolCallRecord:
     result: str
     success: bool = True
     error: str | None = None
+    retryable: bool = False
+
+
+ApprovalDecision = Literal["once", "session", "deny"]
+ApprovalCallback = Callable[[str, dict[str, Any], str], ApprovalDecision]
 
 
 # ── ToolExecutor ─────────────────────────────────────────────
@@ -110,10 +125,13 @@ class ToolExecutor:
         workdir: Path,
         safety: SafetyGate,
         allowed_tools: list[str] | None = None,
+        approval_callback: ApprovalCallback | None = None,
     ):
         self.workdir = workdir.resolve()
         self.safety = safety
         self.allowed_tools = allowed_tools
+        self.approval_callback = approval_callback
+        self.session_approvals: set[str] = set()
         self.history: list[ToolCallRecord] = []
 
     def execute(self, tool_calls: list[dict]) -> list[dict]:
@@ -139,12 +157,23 @@ class ToolExecutor:
                 continue
 
             try:
-                args = json.loads(fn["arguments"])
-            except json.JSONDecodeError as e:
+                args = self._parse_arguments(fn.get("arguments"))
+            except (json.JSONDecodeError, TypeError, ValueError) as e:
                 args = {}
-                result_text = f"错误: 参数 JSON 解析失败: {e}"
+                result_text = (
+                    f"工具参数不完整，未执行 {name}: {e}。"
+                    "请立即重新调用同一工具，并返回完整、有效的 arguments JSON；"
+                    "长文件内容不得省略或截断。"
+                )
                 self.history.append(
-                    ToolCallRecord(name, args, result_text, success=False, error=str(e))
+                    ToolCallRecord(
+                        name,
+                        args,
+                        result_text,
+                        success=False,
+                        error=str(e),
+                        retryable=True,
+                    )
                 )
                 results.append({
                     "role": "tool",
@@ -156,6 +185,65 @@ class ToolExecutor:
             # 安全校验
             try:
                 self.safety.check(name, args)
+            except ApprovalRequired as e:
+                if e.permission_key in self.session_approvals:
+                    pass
+                elif self.approval_callback is None:
+                    result_text = f"需要用户授权: {e}"
+                    self.history.append(
+                        ToolCallRecord(
+                            name,
+                            args,
+                            result_text,
+                            success=False,
+                            error=str(e),
+                        )
+                    )
+                    results.append({
+                        "role": "tool",
+                        "tool_call_id": tc["id"],
+                        "content": result_text,
+                    })
+                    continue
+                else:
+                    decision = self.approval_callback(name, args, str(e))
+                    if decision == "session":
+                        self.session_approvals.add(e.permission_key)
+                    elif decision != "once":
+                        result_text = f"用户拒绝执行: {args.get('command', name)}"
+                        self.history.append(
+                            ToolCallRecord(
+                                name,
+                                args,
+                                result_text,
+                                success=False,
+                                error="user_denied",
+                            )
+                        )
+                        results.append({
+                            "role": "tool",
+                            "tool_call_id": tc["id"],
+                            "content": result_text,
+                        })
+                        continue
+            except CommandRewriteRequired as e:
+                result_text = f"命令格式需要改写，未执行: {e}"
+                self.history.append(
+                    ToolCallRecord(
+                        name,
+                        args,
+                        result_text,
+                        success=False,
+                        error=str(e),
+                        retryable=True,
+                    )
+                )
+                results.append({
+                    "role": "tool",
+                    "tool_call_id": tc["id"],
+                    "content": result_text,
+                })
+                continue
             except SafetyError as e:
                 result_text = f"安全拦截: {e}"
                 self.history.append(
@@ -185,6 +273,23 @@ class ToolExecutor:
             })
 
         return results
+
+    @staticmethod
+    def _parse_arguments(raw_arguments: Any) -> dict[str, Any]:
+        """兼容供应商返回 JSON 字符串或已解析对象两种 function arguments。"""
+        if isinstance(raw_arguments, dict):
+            return raw_arguments
+        if not isinstance(raw_arguments, str):
+            raise TypeError("arguments 必须是 JSON 字符串或对象")
+        try:
+            parsed = json.loads(raw_arguments)
+        except json.JSONDecodeError:
+            # 部分兼容接口会在字符串值中返回未转义换行；strict=False 可安全
+            # 接受控制字符，但不会猜测或补写被截断的文件内容。
+            parsed = json.loads(raw_arguments, strict=False)
+        if not isinstance(parsed, dict):
+            raise ValueError("arguments JSON 必须是对象")
+        return parsed
 
     def _dispatch(self, name: str, args: dict) -> str:
         if name == "read_file":
@@ -258,21 +363,31 @@ class ToolExecutor:
 
     def _run_command(self, command: str) -> str:
         try:
-            args = shlex.split(command)
-            result = subprocess.run(
-                args,
-                shell=False,
-                capture_output=True,
-                text=True,
-                timeout=60,
-                cwd=str(self.workdir),
+            segments = self.safety.parse_command_segments(
+                command,
+                allow_external_paths=True,
             )
-            output = ""
-            if result.stdout:
-                output += result.stdout
-            if result.stderr:
-                output += f"\n[stderr]\n{result.stderr}"
-            output += f"\n[exit code: {result.returncode}]"
+            outputs = []
+            for args in segments:
+                result = subprocess.run(
+                    args,
+                    shell=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                    cwd=str(self.workdir),
+                )
+                output = ""
+                if result.stdout:
+                    output += result.stdout
+                if result.stderr:
+                    output += f"\n[stderr]\n{result.stderr}"
+                output += f"\n[exit code: {result.returncode}]"
+                outputs.append(f"$ {shlex.join(args)}\n{output.strip()}")
+                if result.returncode != 0:
+                    break
+
+            output = "\n\n".join(outputs)
 
             # 截断过长输出
             max_chars = 8000

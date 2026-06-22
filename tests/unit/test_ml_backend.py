@@ -18,6 +18,7 @@ from airouter.engine.complexity.ml_backend import (
     get_backend,
     reset_backend,
 )
+from airouter.engine.complexity.types import ComplexityContext
 
 
 @pytest.fixture(autouse=True)
@@ -133,6 +134,25 @@ class TestBuildRequest:
 
         meta = backend._request_type.call_args.kwargs["context_metadata"]
         assert meta["has_code_block"] is True
+
+    def test_build_request_maps_route_history_to_opensquilla_objects(self):
+        backend = MagicMock(spec=OpenSquillaBackend)
+        backend._request_type = MagicMock()
+        backend._available = True
+        context = ComplexityContext.from_task(
+            "只改名字",
+            history=("创建页面",),
+            prev_assistant="页面已创建",
+            prev_decisions=("R0", "R1"),
+            turn_index=2,
+        )
+
+        OpenSquillaBackend._build_request(backend, "只改名字", context)
+
+        decisions = backend._request_type.call_args.kwargs["prev_route_decisions"]
+        assert [item.route_class for item in decisions] == ["R0", "R1"]
+        assert all(item.difficulty == 0.0 for item in decisions)
+        assert all(item.margin == 0.0 for item in decisions)
 
 
 class TestMapResult:

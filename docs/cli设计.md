@@ -12,12 +12,13 @@
 4. [命令二：optimize — 成本优化](#4-命令二optimize--成本优化)
 5. [命令三：benchmark — 基准测试](#5-命令三benchmark--基准测试)
 6. [命令四：audit — 消费审计](#6-命令四audit--消费审计)
-7. [命令五：run — Agent 执行](#7-命令五run--agent-执行)
-8. [Agent 子系统详解](#8-agent-子系统详解)
-9. [路由子系统概览](#9-路由子系统概览)
-10. [公共数据结构](#10-公共数据结构)
-11. [配置系统](#11-配置系统)
-12. [错误处理](#12-错误处理)
+7. [命令五：run — 单次 Agent 执行](#7-命令五run--单次-agent-执行)
+8. [命令六：agent — 交互式 Agent](#8-命令六agent--交互式-agent)
+9. [Agent 子系统详解](#9-agent-子系统详解)
+10. [路由子系统概览](#10-路由子系统概览)
+11. [公共数据结构](#11-公共数据结构)
+12. [配置系统](#12-配置系统)
+13. [错误处理](#13-错误处理)
 
 ---
 
@@ -30,7 +31,7 @@
 ┌─────────────────────────────────────────────────┐
 │                  CLI 层 (Typer)                   │
 │  main.py → analyze / optimize / benchmark /      │
-│             audit / run                           │
+│             audit / run / agent                   │
 └─────────┬─────────┬──────────┬─────────┬────────┘
           │         │          │         │
           ▼         ▼          ▼         ▼
@@ -77,7 +78,7 @@
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="sklearn")
 ```
-- **为什么**：OpenSquilla ML 模型的 pickle 是用旧版 sklearn 训练的，加载时会输出 `InconsistentVersionWarning`。功能不受影响，但会污染终端输出。
+- **为什么**：OpenSquilla ML 模型的 pickle 与当前环境 sklearn 版本不一致时会输出 `InconsistentVersionWarning`。项目的 `ml` 可选依赖已经固定匹配版本，这里只是避免非标准环境污染终端输出。
 
 ```python
 import os
@@ -103,13 +104,14 @@ app = typer.Typer(
 每个命令模块导出一个函数，通过 `app.command(name)(function)` 注册：
 
 ```python
-from airouter.cli import analyze, audit, benchmark, optimize, run
+from airouter.cli import agent, analyze, audit, benchmark, optimize, run
 
 app.command("analyze")(analyze.analyze)
 app.command("audit")(audit.audit)
 app.command("benchmark")(benchmark.benchmark)
 app.command("optimize")(optimize.optimize)
 app.command("run")(run.run)
+app.command("agent")(agent.agent)
 ```
 
 - **为什么不用装饰器**：各命令模块的函数定义时不依赖 Typer，注册逻辑集中在 main.py。方便模块独立测试。
@@ -488,7 +490,7 @@ SQL 查询 `routing_decision_records` LEFT JOIN `execution_feedback_records`。C
 
 ---
 
-## 7. 命令五：run — Agent 执行
+## 7. 命令五：run — 单次 Agent 执行
 
 **文件**：`src/airouter/cli/run.py`
 
@@ -547,7 +549,151 @@ SQL 查询 `routing_decision_records` LEFT JOIN `execution_feedback_records`。C
 
 ---
 
-## 8. Agent 子系统详解
+## 8. 命令六：agent — 交互式 Agent
+
+**文件**：`src/airouter/cli/agent.py`
+
+### CLI 参数
+
+```python
+def agent(
+    workdir: str = "--workdir, -w",         # 工作目录，默认 "."
+    resume: str = "--resume",               # 恢复会话: latest 或 session_id
+    model: str = "--model, -m",             # 覆盖执行模型
+    yes: bool = "--yes, -y",                # 跳过所有确认
+    max_cost: float = "--max-cost",         # 会话总成本上限，默认 5.0
+    max_turns: int = "--max-turns",         # 每轮最大工具调用次数，默认 30
+)
+```
+
+### REPL 主循环
+
+```
+┌─ console.input("> ") 获取用户输入
+│
+├─ 空输入 → 跳过
+├─ /开头 → handle_slash() → 可能退出
+├─ 普通文本 → 回显带底色 → execute_turn() → save()
+└─ EOFError/Ctrl+C → save() → 退出
+```
+
+### 核心类：AgentSession
+
+**文件**：`src/airouter/engine/agent/session.py`
+
+```
+AgentSession
+├── __init__(workdir, model_override, skip_approval, max_cost, max_turns)
+│   ├── 初始化 Router, AdapterFactory, ModelRegistry（强制 OpenSquilla 模式）
+│   ├── 生成 session_id（微秒精度）
+│   └── 初始化累积状态（history_messages, cost, tool_exec, touched_files）
+│
+├── execute_turn(user_input)
+│   ├── _ensure_session_dir()
+│   ├── _build_routing_text(user_input)  ← 包含上下文摘要和已修改文件
+│   ├── router.route(routing_text)       ← 带 spinner "分析任务中..."
+│   ├── GoalBuilder.build(decision, user_input, workdir)
+│   ├── _apply_model_override(decision)
+│   ├── 首轮模型确认（turn_count == 0 时）
+│   ├── requires_approval 确认
+│   ├── _build_runtime_messages(goal, user_input)
+│   ├── run_agent_loop(...)              ← 共享 agent loop
+│   │   ├── on_turn_start → "思考中..." spinner
+│   │   └── on_tool_call → 实时显示 ✓/✗ 工具状态
+│   ├── 更新 history_messages = result.messages[1:]
+│   ├── _append_tool_records() → tools.jsonl
+│   └── _append_event() → events.jsonl
+│
+├── handle_slash(input) → bool
+│   ├── /exit → save() → return True
+│   ├── /help → 打印命令表
+│   ├── /model [name] → 编号菜单选择模型，或按名称直接切换
+│   ├── /cost → 打印成本面板
+│   ├── /files → 打印已修改文件
+│   ├── /summary → 打印上下文摘要
+│   ├── /compact → 手动压缩上下文
+│   └── /reset → 清空上下文（保留成本/文件）
+│
+├── save()
+│   ├── _save_session_json() → session.json
+│   ├── _save_messages_current() → messages.current.json
+│   ├── _save_cost() → cost.json
+│   └── _save_touched_files() → touched_files.json
+│
+└── restore(resume_id) → bool
+    ├── "latest" → _find_latest_session()（只选有 session.json 的目录）
+    ├── 恢复 history_messages, cost, tool_exec.history, touched_files
+    └── 恢复 last_turn_summary, context_summary
+```
+
+### 共享 Agent Loop
+
+**文件**：`src/airouter/engine/agent/loop.py`
+
+`run` 和 `agent` 共用同一套 agent loop：
+
+```python
+run_agent_loop(
+    adapter, model_entry, messages, workdir, allowed_tools, config,
+    existing_tool_exec=None,      # REPL 续接时传入
+    existing_cost=None,           # REPL 续接时传入
+    on_tool_call=None,            # 工具调用后回调
+    on_turn_start=None,           # 模型调用前回调（spinner）
+) → LoopResult
+```
+
+**LoopResult 关键字段**：
+- `new_tool_history`: 仅本轮新增的工具调用（用于持久化 tools.jsonl）
+- `cost_delta_cny`: 本轮新增成本（cost_after - cost_before）
+- `messages`: 完整运行时消息（含 system + history + 当前轮）
+
+### 上下文压缩
+
+`_get_history_messages()` 在消息 token 数超过阈值（60k）时自动触发：
+
+```
+1. _split_into_blocks(history) → 按 user message 切分为 turn blocks
+2. 保留最近 4 个 blocks
+3. 旧 blocks → _summarize_blocks()（按价格选择最便宜且 Key 可用的模型生成摘要）
+4. 组装 [summary] + recent_blocks
+5. _remove_orphan_tool_messages() → 确保无孤立 tool message
+```
+
+摘要优先调用已配置的轻量模型，Token 和费用会记入当前 `CostSummary`。如果相应提供商没有 API Key，则尝试下一个轻量模型；全部不可用时使用本地截断摘要。
+
+### PE/PER 在 REPL 中的边界
+
+`AgentSession` 会保留 Router 的 `PLAN_EXECUTE` / `PLAN_EXECUTE_REVIEW` 判断并向用户提示，但交互式 REPL 当前只执行单模型 Agent Loop。完整 Planner → Executor → Reviewer 多模型协作只在一次性 `ai-router run` 中实现。
+
+### Session 目录结构
+
+```
+.airouter/sessions/<session_id>/
+  session.json              # 元数据
+  messages.current.json     # 对话历史（不含 system prompt）
+  events.jsonl              # 审计日志
+  tools.jsonl               # 工具调用记录
+  cost.json                 # 累积成本
+  touched_files.json        # 被修改的文件列表
+```
+
+### run vs agent 对比
+
+| 特性 | `run` | `agent` |
+|------|-------|---------|
+| 交互方式 | 单次输入 | REPL 多轮对话 |
+| 上下文 | 无历史 | 累积 history_messages |
+| 模型确认 | 仅高风险确认 | 首轮确认 + 高风险确认 |
+| 持久化 | 无 | session 目录 |
+| 会话恢复 | 不支持 | `--resume` |
+| 上下文压缩 | 不需要 | 自动 + `/compact` |
+| 默认 max_turns | 10 | 30 |
+| 默认 max_cost | 1.0 | 5.0 |
+| Slash 命令 | 无 | 8 个 |
+
+---
+
+## 9. Agent 子系统详解
 
 **目录**：`src/airouter/engine/agent/`
 
@@ -556,6 +702,8 @@ SQL 查询 `routing_decision_records` LEFT JOIN `execution_feedback_records`。C
 | 文件 | 职责 |
 |------|------|
 | `executor.py` | 主执行器：路由、目标构建、Agent 循环、Plan-Execute-Review |
+| `loop.py` | 共享 agent loop（run 和 agent 共用） |
+| `session.py` | AgentSession：REPL 管理、持久化、slash 命令、上下文压缩 |
 | `goal.py` | ExecutionGoal 数据类 + GoalBuilder 构建器 |
 | `report.py` | ExecutionReport 数据类 + CostSummary 成本追踪 |
 | `tools.py` | 4 个工具定义 + ToolExecutor + ToolCallRecord |
@@ -564,7 +712,7 @@ SQL 查询 `routing_decision_records` LEFT JOIN `execution_feedback_records`。C
 
 ---
 
-### 8.1 executor.py — AgentExecutor
+### 9.1 executor.py — AgentExecutor
 
 **构造函数**：
 ```python
@@ -654,7 +802,7 @@ AGENT_SYSTEM_PROMPT.format(category, complexity, risk_level, workdir, success_cr
 
 ---
 
-### 8.2 goal.py — ExecutionGoal + GoalBuilder
+### 9.2 goal.py — ExecutionGoal + GoalBuilder
 
 #### ExecutionGoal
 
@@ -695,11 +843,11 @@ class GoalConstraints:
 **allowed_tools 选择**：
 - 基础：read_file + edit_file + run_command
 - CODE_GENERATION / REFACTORING / TEST_GENERATION 追加：write_file
-- LOW 风险 + SIMPLE：移除 run_command
+- LOW 风险 + SIMPLE：非工程任务移除 run_command；代码生成、审查、重构、缺陷分析、测试生成和 DevOps 仍允许受控验证命令
 
 ---
 
-### 8.3 report.py — ExecutionReport + CostSummary
+### 9.3 report.py — ExecutionReport + CostSummary
 
 #### CostSummary
 
@@ -754,7 +902,7 @@ return True
 
 ---
 
-### 8.4 tools.py — 工具定义 + ToolExecutor
+### 9.4 tools.py — 工具定义 + ToolExecutor
 
 #### 4 个工具（OpenAI function calling 格式）
 
@@ -780,7 +928,7 @@ return True
 
 ---
 
-### 8.5 safety.py — SafetyGate
+### 9.5 safety.py — SafetyGate
 
 #### SafetyConfig
 
@@ -813,7 +961,7 @@ max_file_size_bytes = 5 * 1024 * 1024  # 5 MB
 
 ---
 
-### 8.6 text_parser.py — TextToolParser
+### 9.6 text_parser.py — TextToolParser
 
 为不支持 OpenAI function calling 的模型提供文本格式 fallback。
 
@@ -841,7 +989,7 @@ def parse(text: str) -> list[dict] | None:
 
 ---
 
-## 9. 路由子系统概览
+## 10. 路由子系统概览
 
 **目录**：`src/airouter/engine/router/`
 
@@ -911,7 +1059,7 @@ HIGH 风险自动追加 PLAN_EXECUTE_REVIEW。
 
 ---
 
-## 10. 公共数据结构
+## 11. 公共数据结构
 
 ### 枚举类型（`src/airouter/models/enums.py`）
 
@@ -1011,7 +1159,7 @@ class AgentConfig:
 
 ---
 
-## 11. 配置系统
+## 12. 配置系统
 
 ### AppSettings（pydantic-settings）
 
@@ -1032,10 +1180,10 @@ class AppSettings(BaseSettings):
     kimi_api_key: str = ""
     minimax_api_key: str = ""
 
-    # 复杂度分析
-    complexity: ComplexitySettings = ComplexitySettings()
-
-    # ... 其他配置
+    data_dir: Path
+    db_url: str
+    debug: bool
+    opensquilla_bundle_dir: str
 ```
 
 **环境变量命名规则**：`AIROUTER_` + 字段名大写。例如 `deepseek_api_key` → `AIROUTER_DEEPSEEK_API_KEY`。
@@ -1053,23 +1201,27 @@ models:
   - name: deepseek-v4-pro
     provider: deepseek
     tier: 1
-    input_price_per_1k: 0.004
-    output_price_per_1k: 0.016
-    context_window: 128000
-    capabilities: [function_calling, json_mode]
-    cache_read_price: 0.001  # 可选
-    ...
+    api_base: https://token.cvte.com/v1
+    input_price_per_1k: 0.003132
+    output_price_per_1k: 0.006264
+    max_context_window: 1000000
+    capabilities: [code_gen, complex_reasoning, code_review]
+    allow_sensitive_data: true
+    cache:
+      supports_prompt_caching: true
+      cache_mode: implicit
+      cache_read_price_ratio: 0.10
 ```
 
-每个模型包含：name, provider, tier, 价格, context_window, capabilities, 可选的 cache 价格。
+每个模型包含：name、provider、tier、API 地址、输入/输出价格、`max_context_window`、capabilities、敏感数据策略和嵌套的 cache 配置。
 
 ### load_all()
 
-`load_all()` 函数加载 AppSettings + models.yaml，返回组合配置。CLI 命令在初始化时调用此函数。
+`AppSettings` 负责环境变量、API Key 和数据目录；`load_all()` 读取 models、routing_rules、budgets、quality_defaults、compression_policy、complexity 等 YAML，返回 `AppConfig`。CLI 命令会分别构造二者。
 
 ---
 
-## 12. 错误处理
+## 13. 错误处理
 
 ### CLI 层错误处理
 
@@ -1084,7 +1236,7 @@ models:
 ### Engine 层错误处理
 
 - **路由失败**：Router.route() 返回降级 RoutingDecision（ESCALATE 策略），不抛异常
-- **模型调用失败**：Adapter 层捕获网络/认证错误，返回错误信息
+- **模型调用失败**：Adapter 层把网络、认证、限流和超时异常转换为项目自定义异常并向上抛出
 - **工具执行失败**：ToolExecutor 捕获异常，记录到 ToolCallRecord(success=False)，Agent 可以看到错误并调整策略
 - **安全拦截**：SafetyGate 抛 SafetyError，ToolExecutor 捕获并记录
 
@@ -1098,10 +1250,10 @@ models:
 
 ### Adapter 层错误处理
 
-`OpenAICompatAdapter.chat()` 捕获：
-- `openai.APIConnectionError` → 网络错误
-- `openai.RateLimitError` → 限流
-- `openai.AuthenticationError` → API Key 无效
-- 其他异常 → 通用错误
+`OpenAICompatAdapter.chat()` 将上游异常转换为：
+- `AdapterAuthError`：API Key 无效
+- `AdapterRateLimitError`：请求被限流
+- `AdapterTimeoutError`：请求超时
+- `AdapterError`：其他 API 或响应错误
 
-错误时返回空 AdapterResponse（content=错误信息, tokens=0），不抛异常，让上层决定如何处理。
+异常会继续向上抛出，由 Benchmark、`run` 或交互式 `agent` 的执行边界决定是否终止、重试或向用户显示错误。`run` 和 `agent` 的真实执行禁止缺 Key 时静默回退 Mock。

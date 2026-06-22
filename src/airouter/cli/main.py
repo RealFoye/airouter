@@ -11,7 +11,7 @@ if "MPLCONFIGDIR" not in os.environ:
 
 import typer  # noqa: E402
 
-from airouter.cli import analyze, audit, benchmark, optimize, run  # noqa: E402
+from airouter.cli import agent, analyze, audit, benchmark, optimize, run  # noqa: E402
 
 app = typer.Typer(
     name="ai-router",
@@ -24,6 +24,7 @@ app.command("audit")(audit.audit)
 app.command("benchmark")(benchmark.benchmark)
 app.command("optimize")(optimize.optimize)
 app.command("run")(run.run)
+app.command("agent")(agent.agent)
 
 
 @app.callback()

@@ -70,6 +70,17 @@ KEYWORD_RULES: dict[TaskCategory, list[tuple[str, float]]] = {
     ],
 }
 
+# “chatbot/网页问答”描述的是要构建的软件产品，不等于用户正在进行普通对话。
+# 只有明确的构建意图和软件产物同时出现时才加分，避免把“做一个总结”之类的
+# 普通请求一概判为代码生成。
+SOFTWARE_BUILD_INTENT_TERMS = [
+    "做一个", "做个", "搭建", "制作", "开发", "实现", "创建一个", "新增一个",
+]
+SOFTWARE_ARTIFACT_TERMS = [
+    "网页", "网站", "页面", "前端", "后端", "应用", "app", "chatbot",
+    "聊天机器人", "组件", "服务", "程序",
+]
+
 
 # ── 复杂度推断规则（已抽取到 rule_logic.py） ─────────────────
 
@@ -200,6 +211,17 @@ class TaskAnalyzer:
                     score += weight
             if score > 0:
                 scores[category] = score
+
+        has_build_intent = self._contains_any(
+            desc, desc_lower, SOFTWARE_BUILD_INTENT_TERMS
+        )
+        has_software_artifact = self._contains_any(
+            desc, desc_lower, SOFTWARE_ARTIFACT_TERMS
+        )
+        if has_build_intent and has_software_artifact:
+            scores[TaskCategory.CODE_GENERATION] = (
+                scores.get(TaskCategory.CODE_GENERATION, 0.0) + 4.0
+            )
 
         if not scores:
             return TaskCategory.CONVERSATION  # fallback

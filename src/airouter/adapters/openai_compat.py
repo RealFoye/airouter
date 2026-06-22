@@ -111,17 +111,22 @@ class OpenAICompatAdapter(BaseAdapter):
         # Extract tool_calls for function calling (Agent mode)
         tool_calls_data = None
         if hasattr(choice.message, "tool_calls") and choice.message.tool_calls:
-            tool_calls_data = [
-                {
-                    "id": tc.id,
-                    "type": tc.type,
-                    "function": {
-                        "name": tc.function.name,
-                        "arguments": tc.function.arguments,
-                    },
-                }
-                for tc in choice.message.tool_calls
-            ]
+            function_calls = []
+            for tc in choice.message.tool_calls:
+                if tc.type != "function":
+                    logger.warning("Ignoring unsupported custom tool call: id=%s", tc.id)
+                    continue
+                function_calls.append(
+                    {
+                        "id": tc.id,
+                        "type": tc.type,
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments,
+                        },
+                    }
+                )
+            tool_calls_data = function_calls or None
 
         return AdapterResponse(
             content=content,

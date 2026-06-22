@@ -40,7 +40,8 @@ def run(
     config = load_all()
     settings = AppSettings()
     registry = ModelRegistry(config.models)
-    factory = AdapterFactory(settings)
+    # Agent 真实执行不能静默降级到 Mock，否则用户会误以为任务已真实完成。
+    factory = AdapterFactory(settings, allow_mock_fallback=False)
 
     # ai-router run 默认使用 OpenSquilla 模式（不修改全局 config）
     agent_complexity = config.complexity.model_copy(update={"mode": "opensquilla"})

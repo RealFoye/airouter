@@ -143,8 +143,8 @@ class GoalBuilder:
         if category == TaskCategory.TEST_GENERATION:
             base.append("write_file")
 
-        # 低风险 + 简单任务：不需要 run_command
-        if risk_level == RiskLevel.LOW and complexity == ComplexityLevel.SIMPLE:
-            base = [t for t in base if t != "run_command"]
+        # run_command 始终作为可选工具提供。真正的执行边界由 SafetyGate 负责：
+        # ls 等只读命令直接运行，未列出的操作询问用户，不可逆操作仍硬拦截。
+        # 这样即使“查看目录”被分类为 CONVERSATION，Agent 也能完成任务。
 
         return base
