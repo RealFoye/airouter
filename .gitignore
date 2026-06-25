@@ -42,6 +42,10 @@ Thumbs.db
 # Benchmark runtime artifacts
 runs/
 
+# Generated presentation and preview artifacts
+outputs/
+tmp/
+
 # OpenSquilla (not committed — obtained separately)
 /opensquilla/
 

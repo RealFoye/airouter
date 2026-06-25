@@ -1,6 +1,8 @@
 """ai-router analyze 命令。"""
 
 import json
+from enum import Enum
+from pathlib import Path
 
 import typer
 from rich.console import Console
@@ -8,10 +10,37 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from airouter.config import load_all
 from airouter.engine.router.router import Router
 
 app = typer.Typer()
 console = Console()
+
+
+class ComplexityMode(str, Enum):
+    """CLI 可选的复杂度分析模式。"""
+
+    RULES = "rules"
+    SHADOW = "shadow"
+    OPENSQUILLA = "opensquilla"
+    HYBRID = "hybrid"
+
+
+def _build_router(mode: ComplexityMode) -> Router:
+    """构建分析 Router；默认 Bundle 与 Agent 入口保持一致。"""
+    config = load_all()
+    complexity = config.complexity.model_copy(update={"mode": mode.value})
+
+    if mode is not ComplexityMode.RULES and complexity.bundle_dir is None:
+        project_root = Path(__file__).resolve().parents[3]
+        default_bundle = (
+            project_root
+            / "opensquilla/src/opensquilla/squilla_router/models/v4.2_phase3_inference"
+        )
+        if default_bundle.exists():
+            complexity = complexity.model_copy(update={"bundle_dir": default_bundle})
+
+    return Router(config=config.model_copy(update={"complexity": complexity}))
 
 
 @app.callback(invoke_without_command=True)
@@ -19,9 +48,14 @@ def analyze(
     task: str = typer.Argument(..., help="任务描述"),
     output_format: str = typer.Option("rich", "--format", "-f", help="输出格式: rich/json"),
     show_complexity: bool = typer.Option(False, "--show-complexity", help="显示复杂度分析详情"),
+    mode: ComplexityMode = typer.Option(
+        ComplexityMode.OPENSQUILLA,
+        "--mode",
+        help="复杂度模式；默认使用 OpenSquilla ml_final",
+    ),
 ):
     """分析任务并推荐最优模型。"""
-    router = Router()
+    router = _build_router(mode)
     decision = router.route(task)
 
     if output_format == "json":
@@ -128,6 +162,11 @@ def _output_rich(decision):
     if decision.quality_gate:
         gates_text = ", ".join(decision.quality_gate)
         console.print(f"\n[bold]质量门禁:[/bold] {gates_text}")
+
+    diag = decision.complexity_analysis
+    if diag and diag.mode != ComplexityMode.RULES.value and not diag.ml_available:
+        reason = diag.fallback_reason or diag.resolution_reason
+        console.print(f"\n[yellow]OpenSquilla 不可用，已回退 Rules：{reason}[/yellow]")
 
 
 def _output_json(decision):

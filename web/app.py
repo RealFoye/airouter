@@ -51,7 +51,7 @@ class ModelBenchmark:
 
 MODEL_BENCHMARKS: dict[str, ModelBenchmark] = {
     "qwen3.7-plus": ModelBenchmark(72.2, 0.826, 1.48, "质量最稳"),
-    "deepseek-v4-pro": ModelBenchmark(70.0, 0.800, 0.59, "性价比最佳"),
+    "deepseek-v4-pro": ModelBenchmark(70.0, 0.800, 0.59, "质量成本均衡"),
     "glm-5.1": ModelBenchmark(65.6, 0.800, 4.19, "强模型备选"),
     "qwen3.7-max": ModelBenchmark(64.4, 0.799, 8.16, "高成本强模型"),
     "deepseek-v4-flash": ModelBenchmark(64.4, 0.786, 0.20, "成本最低"),
@@ -59,7 +59,7 @@ MODEL_BENCHMARKS: dict[str, ModelBenchmark] = {
 
 MODEL_DESCRIPTIONS = {
     "deepseek-v4-flash": "便宜、响应快，适合简单和容易检查的任务。",
-    "deepseek-v4-pro": "质量接近高档模型，成本更低，适合作为默认稳妥选择。",
+    "deepseek-v4-pro": "质量和成本更均衡，适合代码、复杂推理和需要确认的任务。",
     "qwen3.7-plus": "综合质量最高，适合需要更稳结果的任务。",
     "qwen3.7-max": "成本较高，适合特别需要强模型兜底的任务。",
     "glm-5.1": "强模型备选，适合需要交叉验证或替代方案时使用。",
@@ -1216,16 +1216,15 @@ def _dynamic_notices(task: str, decision: RoutingDecision) -> list[str]:
 
 
 def _why_this_model(model_name: str, treatment: str, decision: RoutingDecision) -> list[str]:
-    stats = MODEL_BENCHMARKS.get(model_name)
     saving = _cost_saving_vs_most_expensive(model_name, decision)
     reasons = [
         f"系统判断这个任务适合「{treatment}」。",
         "推荐会优先在完成质量、成本和是否需要确认之间做平衡。",
     ]
-    if stats:
-        reasons.append(
-            f"{model_name} 在最新路由评测中的通过率约 {stats.pass_rate:.1f}%，定位是「{stats.position}」。"
-        )
+    if model_name == "deepseek-v4-pro":
+        reasons.append("deepseek-v4-pro 满足该任务的能力与风险要求，在质量和成本之间更均衡。")
+    elif description := MODEL_DESCRIPTIONS.get(model_name):
+        reasons.append(f"{model_name} {description}")
     if saving and saving > 0.05:
         reasons.append(f"相比使用 qwen3.7-max，预计节省约 {saving:.0%} 成本。")
     return reasons

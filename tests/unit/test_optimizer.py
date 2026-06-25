@@ -56,6 +56,42 @@ class TestClassifyPromptLines:
         assert len(classified["conversation_history"]) == 0
         assert len(classified["dynamic_query"]) == 3
 
+    def test_chinese_full_width_conversation_markers(self, optimizer):
+        """中文全角冒号的用户/助手消息应归入对话历史。"""
+        prompt = "用户：请先检查代码\n助手：我会先读取文件\n请给出最终建议"
+
+        classified = optimizer._classify_prompt_lines(prompt)
+
+        assert classified["conversation_history"] == [
+            "用户：请先检查代码",
+            "助手：我会先读取文件",
+        ]
+        assert classified["dynamic_query"] == ["请给出最终建议"]
+
+    def test_section_headers_classify_following_content(self, optimizer):
+        """中英文分节标题后的正文应归入对应 Token 分类。"""
+        prompt = (
+            "System Prompt:\n"
+            "回答必须引用代码位置。\n"
+            "Tool Definitions:\n"
+            "read_file(path) 读取文件。\n"
+            "项目上下文：\n"
+            "服务使用 FastAPI 和 PostgreSQL。\n"
+            "对话历史：\n"
+            "用户：先检查 SQL 注入。\n"
+            "助手：我会先查看查询构造。\n"
+            "当前请求：\n"
+            "请按 P1/P2/P3 输出。"
+        )
+
+        classified = optimizer._classify_prompt_lines(prompt)
+
+        assert "回答必须引用代码位置。" in classified["system_prompt"]
+        assert "read_file(path) 读取文件。" in classified["tool_definitions"]
+        assert "服务使用 FastAPI 和 PostgreSQL。" in classified["fixed_context"]
+        assert "用户：先检查 SQL 注入。" in classified["conversation_history"]
+        assert "请按 P1/P2/P3 输出。" in classified["dynamic_query"]
+
 
 # ── InputBreakdown 测试 ───────────────────────────────────
 
@@ -100,6 +136,76 @@ class TestInputBreakdown:
         assert breakdown.tool_definitions_tokens > 0
         assert breakdown.fixed_context_tokens > 0
         assert breakdown.conversation_history_tokens > 0
+
+
+# ── 裁剪证据测试 ──────────────────────────────────────────
+
+
+class TestTrimmingEvidence:
+    def test_locates_project_context_without_claiming_semantic_duplicate(self, optimizer):
+        """定位项目上下文行号，但不能把比例估算伪装成语义重复检测。"""
+        prompt = (
+            "System Prompt:\n"
+            "你是代码助手。\n"
+            "项目上下文:\n"
+            "服务使用 FastAPI，认证模块位于 app/auth.py，测试位于 tests。\n"
+            "当前请求:\n"
+            "请检查登录函数。"
+        )
+
+        evidence = optimizer._build_trimming_evidence(prompt, trim_tokens=8, trim_ratio=0.3)
+
+        assert len(evidence) == 1
+        item = evidence[0]
+        assert item["line_start"] == 4
+        assert item["line_end"] == 4
+        assert item["source"] == "项目上下文"
+        assert "FastAPI" in str(item["excerpt"])
+        assert "未证明语义重复" in str(item["reason"])
+        assert item["confidence"] == "启发式候选"
+        assert item["estimated_reduction_tokens"] > 0
+
+    def test_marks_exact_duplicate_as_deterministic(self, optimizer):
+        """只有完全相同的内容再次出现时，才标记为确定性重复。"""
+        prompt = (
+            "项目上下文:\n"
+            "认证模块位于 app/auth.py。\n"
+            "当前请求:\n"
+            "认证模块位于 app/auth.py。\n"
+            "请检查登录函数。"
+        )
+
+        evidence = optimizer._build_trimming_evidence(prompt, trim_tokens=4, trim_ratio=0.5)
+
+        assert len(evidence) == 1
+        assert "与第 4 行内容完全重复" in str(evidence[0]["reason"])
+        assert evidence[0]["confidence"] == "确定性重复"
+
+    def test_trimming_suggestion_contains_evidence(self, optimizer):
+        """完整裁剪建议应携带可供 CLI 和 JSON 展示的证据。"""
+        from airouter.models.enums import ContextLevel
+
+        prompt = (
+            "项目上下文:\n"
+            "这是一个包含认证、权限、数据库事务和多文件测试的 FastAPI 项目。\n"
+            "当前请求:\n"
+            "请审查认证模块。"
+        )
+        classified = optimizer._classify_prompt_lines(prompt)
+        breakdown = optimizer._analyze_breakdown(prompt, classified)
+        features = type("F", (), {"context_requirement": ContextLevel.HEAVY})()
+
+        suggestion = optimizer._suggest_trimming(
+            features,
+            breakdown,
+            executor_price=0.02,
+            current_cost=1.0,
+            turns=10,
+            prompt=prompt,
+        )
+
+        assert suggestion.details["evidence"]
+        assert suggestion.details["evidence_method"] == "启发式定位，执行前需确认"
 
 
 # ── 缓存建议测试 ──────────────────────────────────────────
@@ -226,6 +332,23 @@ class TestCompressionSuggestion:
         # 短文本应该几乎没有压缩
         assert suggestion.estimated_savings < 0.01
 
+    def test_none_strategy_does_not_report_compression_savings(self, optimizer):
+        """未达到主动压缩阈值时，不应显示 NONE 策略却仍报告节省。"""
+        prompt = "User: 请检查代码\nAssistant: 我会先分析\n" * 20
+        classified = optimizer._classify_prompt_lines(prompt)
+        breakdown = optimizer._analyze_breakdown(prompt, classified)
+        blocks = optimizer._build_context_blocks(classified)
+
+        from airouter.models.enums import RiskLevel
+
+        features_mock = type("F", (), {"risk_level": RiskLevel.LOW})()
+        suggestion = optimizer._suggest_compression(
+            blocks, features_mock, breakdown, 0.02, 1.0,
+        )
+
+        assert suggestion.estimated_savings == 0
+        assert "未达到主动压缩阈值" in suggestion.description
+
 
 # ── 降级建议测试 ──────────────────────────────────────────
 
@@ -320,7 +443,7 @@ class TestOptimizeResult:
         )
 
         assert result.optimized_cost >= 0
-        assert result.total_estimated_savings <= result.current_cost
+        assert result.total_estimated_savings <= result.scenario_cost
         assert len(result.warnings) > 0
         assert result.current_strategy in list(StrategyType)
 
@@ -333,6 +456,20 @@ class TestOptimizeResult:
         assert result.current_strategy == StrategyType.SINGLE_MODEL
         assert result.current_models.executor == "qwen3.7-max"
 
+    def test_multi_turn_cost_uses_same_baseline_as_savings(self, optimizer):
+        """多轮成本和优化建议必须使用同一个轮数口径。"""
+        result = optimizer.optimize(
+            prompt="你是代码助手\nTool: read_file\nUser: 请检查代码\n" * 100,
+            model_name="qwen3.7-max",
+            scenario="AGENT_MULTI_TURN",
+            expected_turns=10,
+        )
+
+        assert result.estimated_turns == 10
+        assert result.scenario_cost == pytest.approx(result.current_cost * 10)
+        assert result.total_estimated_savings <= result.scenario_cost
+        assert all(s.savings_percentage <= 1.0 for s in result.suggestions)
+
     def test_router_escalate_shows_warning(self, optimizer):
         """P2-1: Router escalate (requires_human_review + empty models) → warning 包含'人工审核'。"""
         # 这个任务会触发 Router escalate（高复杂度 + 需要人工审核）
@@ -344,7 +481,7 @@ class TestOptimizeResult:
             assert any("人工审核" in w for w in result.warnings)
 
     def test_exclusive_savings_takes_max(self, optimizer):
-        """P2-3: 降级和分层互斥，合计只取 max — 直接调用生产代码 _summarize_savings。"""
+        """不同模型路径不与当前模型优化重复相加。"""
         downgrade = OptimizationSuggestion(
             category="降级", title="降级", description="",
             estimated_savings=2.0, savings_percentage=0.4,
@@ -363,13 +500,39 @@ class TestOptimizeResult:
             [downgrade, pe, cache], current_cost,
         )
 
-        # 正交: 缓存 0.5; 互斥: max(2.0, 3.0) = 3.0; 合计 3.5
-        assert total_savings == 3.5
-        assert optimized_cost == 6.5
-        assert total_pct == pytest.approx(0.35)
+        # 当前模型路径是缓存 0.5；模型切换路径 max(降级 2, 分层 3) = 3。
+        # 两条路径取较优者，不把 0.5 和 3.0 跨路径相加。
+        assert total_savings == 3.0
+        assert optimized_cost == 7.0
+        assert total_pct == pytest.approx(0.3)
 
         # 如果互斥错误地求和：2.0 + 3.0 + 0.5 = 5.5，证明互斥确实取 max
         assert total_savings < 5.5
+
+    def test_cache_and_content_path_can_combine_without_double_counting(self, optimizer):
+        """缓存可与内容精简组合，但压缩和裁剪只取较大值。"""
+        suggestions = [
+            OptimizationSuggestion(
+                category="缓存", title="", description="",
+                estimated_savings=1.0, savings_percentage=0.1,
+            ),
+            OptimizationSuggestion(
+                category="压缩", title="", description="",
+                estimated_savings=2.0, savings_percentage=0.2,
+            ),
+            OptimizationSuggestion(
+                category="裁剪", title="", description="",
+                estimated_savings=1.5, savings_percentage=0.15,
+            ),
+        ]
+
+        total_savings, optimized_cost, total_pct = optimizer._summarize_savings(
+            suggestions, 10.0,
+        )
+
+        assert total_savings == 3.0
+        assert optimized_cost == 7.0
+        assert total_pct == pytest.approx(0.3)
 
     def test_summarize_savings_cap_at_current_cost(self, optimizer):
         """savings 不能超过 current_cost（cap）。"""

@@ -1685,6 +1685,11 @@ HUMAN_SPOT_CHECK_RULES = {
 
 ### `ai-router analyze` — 任务分析与模型推荐
 
+该命令只运行本地 Router，不调用候选大模型 API。默认启用 OpenSquilla
+`opensquilla` 模式，使用 `ml_final` 校正规则复杂度；可通过 `--mode rules`、
+`--mode shadow` 或 `--mode hybrid` 进行诊断对照。ML 运行时不可用时会明确提示，
+并优雅回退到 Rules。
+
 ```bash
 $ ai-router analyze "重构用户登录模块，需要支持OAuth2和MFA"
 

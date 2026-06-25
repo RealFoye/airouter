@@ -102,8 +102,10 @@ def _output_rich(result) -> None:
     analysis_text.append(f"{result.input_breakdown.total} input + ~{result.estimated_output_tokens} output\n")
     analysis_text.append("当前方案: ", style="bold")
     analysis_text.append(f"{result.current_strategy.value} ({models_desc})\n")
-    analysis_text.append("当前成本: ", style="bold")
-    analysis_text.append(f"¥{result.current_cost:.4f}")
+    analysis_text.append("单轮成本: ", style="bold")
+    analysis_text.append(f"¥{result.current_cost:.4f}\n")
+    analysis_text.append(f"预计 {result.estimated_turns} 轮成本: ", style="bold")
+    analysis_text.append(f"¥{result.scenario_cost:.4f} ({result.scenario})")
     console.print(Panel(analysis_text, title="[bold blue]分析结果[/bold blue]", border_style="blue"))
 
     # 输入组成分析
@@ -140,15 +142,17 @@ def _output_rich(result) -> None:
         for s in result.suggestions:
             if s.category == "压缩" and "comparison" in s.details:
                 _print_compression_comparison(s)
+            if s.category == "裁剪" and s.details.get("evidence"):
+                _print_trimming_evidence(s)
     else:
         console.print("[dim]未发现有效的优化建议[/dim]")
 
     # 汇总
     summary_text = Text()
-    summary_text.append("\n独立建议合计: ", style="bold yellow")
+    summary_text.append(f"\n按 {result.estimated_turns} 轮估算，最佳参考路径节省: ", style="bold yellow")
     summary_text.append(f"¥{result.total_estimated_savings:.4f} ({result.total_savings_percentage:.0%})")
-    summary_text.append("\n参考优化成本: ", style="bold")
-    summary_text.append(f"¥{result.optimized_cost:.4f}（降级/分层取其一，缓存/压缩/裁剪叠加）")
+    summary_text.append("\n参考优化后成本: ", style="bold")
+    summary_text.append(f"¥{result.optimized_cost:.4f}（不同路径不重复相加）")
     console.print(summary_text)
 
     # 警告
@@ -184,9 +188,36 @@ def _print_compression_comparison(suggestion) -> None:
             f"{data['reduction_rate']:.1%}",
         )
 
-    auto = suggestion.details.get("auto_strategy", "")
     console.print(table)
+    auto = suggestion.details.get("auto_strategy", "")
     console.print(f"  推荐策略: [bold]{auto}[/bold]")
+
+
+def _print_trimming_evidence(suggestion) -> None:
+    """展示裁剪候选的来源、片段和启发式判定依据。"""
+    evidence = suggestion.details.get("evidence", [])
+    if not evidence:
+        return
+
+    table = Table(title="裁剪依据（启发式建议，执行前需确认）")
+    table.add_column("位置", style="cyan", width=20)
+    table.add_column("原文片段", overflow="fold")
+    table.add_column("判定原因", overflow="fold")
+    table.add_column("预计减少", justify="right", width=12)
+
+    for item in evidence:
+        start = int(item["line_start"])
+        end = int(item["line_end"])
+        line_range = f"第 {start} 行" if start == end else f"第 {start}-{end} 行"
+        location = f"{item['source']}\n{line_range}"
+        table.add_row(
+            Text(location),
+            Text(str(item["excerpt"])),
+            Text(f"{item['reason']}（{item['confidence']}）"),
+            f"约 {item['estimated_reduction_tokens']} tokens",
+        )
+
+    console.print(table)
 
 
 def _format_models(models) -> str:

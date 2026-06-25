@@ -28,6 +28,18 @@ def test_analyze_json_output():
     assert "recommended_strategy" in data
     assert "models" in data
     assert "estimated_cost" in data
+    assert data["complexity_analysis"]["mode"] == "opensquilla"
+
+
+def test_analyze_rules_mode():
+    result = runner.invoke(
+        app,
+        ["analyze", "写一个简单的函数", "--mode", "rules", "--format", "json"],
+    )
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["complexity_analysis"]["mode"] == "rules"
+    assert data["complexity_analysis"]["ml_available"] is False
 
 
 def test_analyze_complex_task():
@@ -47,6 +59,7 @@ def test_analyze_help():
     result = runner.invoke(app, ["analyze", "--help"])
     assert result.exit_code == 0
     assert "分析任务并推荐最优模型" in result.output
+    assert "--mode" in result.output
 
 
 # ── Audit CLI 测试 ────────────────────────────────────────────

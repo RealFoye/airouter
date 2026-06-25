@@ -285,9 +285,9 @@ _resolve_input() → PromptOptimizer() → optimizer.optimize() → Rich/JSON �
 | 6 | 确定策略 | 指定 model 用 SINGLE_MODEL；否则用路由推荐 |
 | 7 | 升级检测 | requires_human_review → 生成 escalate 警告 |
 | 8 | 确定轮数 | expected_turns 或场景默认值 |
-| 9 | 当前成本 | `estimator.estimate_strategy_cost()` |
+| 9 | 当前成本 | `estimator.estimate_strategy_cost()` 计算单轮成本，并按 `turns` 得到场景总成本 |
 | 10 | 生成建议 | 5 类 _suggest_*() 方法 |
-| 11 | 汇总 | 正交建议求和 + 互斥建议取 max |
+| 11 | 汇总 | 比较当前模型优化路径与模型/策略切换路径，保守取较优者 |
 
 **行分类的 5 个类别**：
 
@@ -309,15 +309,15 @@ _resolve_input() → PromptOptimizer() → optimizer.optimize() → Rich/JSON �
 | **裁剪** `_suggest_trimming` | 上下文为 HEAVY/EXTREME | HEAVY 裁 30%，EXTREME 裁 50% |
 | **Plan-Execute** `_suggest_plan_execute` | 非 PE 策略 + subtasks >= 2 | 找最便宜 planner + executor，估算 PE 成本 |
 
-**汇总逻辑**：正交建议（cache + compression + trimming）求和；互斥建议（downgrade vs plan_execute）取 max。
+**汇总逻辑**：所有建议先统一到相同的 `turns` 口径。当前模型路径为 `cache + max(compression, trimming)`；模型或策略切换路径为 `max(downgrade, plan_execute)`。两条路径不能直接相加，最终取节省较大的一条作为参考优化成本，避免降级后仍按原模型价格重复计算缓存收益。
 
 ### Rich 输出格式
 
-- **分析结果面板**（蓝色）：当前 Token、当前方案、当前成本
+- **分析结果面板**（蓝色）：当前 Token、当前方案、单轮成本、预计 N 轮场景总成本
 - **输入组成分析面板**：5 类 Token 分布 + 优化提示
 - **优化建议表格**：#、类别（含"需审批"标签）、建议描述、节省金额和比例
 - **压缩策略对比表**（如有）：三种策略的压缩效果
-- **汇总行**：独立建议合计 + 参考优化成本
+- **汇总行**：最佳参考路径节省 + 参考优化后成本
 - **警告面板**（黄色）：重叠/互斥说明
 
 ---

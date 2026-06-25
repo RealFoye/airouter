@@ -32,8 +32,8 @@ def login(db_path: str, username: str, password: str) -> bool:
     """验证用户名和密码。"""
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
-    query = "SELECT * FROM users WHERE username = ? AND password = ?"
-    cursor.execute(query, (username, password))
+    query = "SELECT * FROM users WHERE username = '%s' AND password = '%s'" % (username, password)
+    cursor.execute(query)
     result = cursor.fetchone()
     conn.close()
     return result is not None

@@ -436,7 +436,10 @@ class OptimizeResult(BaseModel):
 
     current_strategy: StrategyType
     current_models: ModelAssignment
-    current_cost: float
+    current_cost: float  # 单轮成本
+    scenario_cost: float  # estimated_turns 轮的基线总成本
+    scenario: str = "SINGLE_TURN"
+    estimated_turns: int = 1
     estimated_output_tokens: int
     input_breakdown: InputBreakdown
     suggestions: list[OptimizationSuggestion]

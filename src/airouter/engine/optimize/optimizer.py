@@ -141,6 +141,7 @@ class PromptOptimizer:
 
         # 7. 当前成本
         current_cost = self._estimate_current_cost(current_strategy, current_models, features)
+        scenario_cost = current_cost * turns
 
         # 8. 当前 executor 的 input price（压缩/裁剪建议用）
         executor_price = self._get_executor_input_price(current_models)
@@ -155,21 +156,31 @@ class PromptOptimizer:
 
         # 10. 生成 5 类建议
         suggestions: list[OptimizationSuggestion] = [
-            self._suggest_cache(current_models, breakdown, scenario, turns, current_cost),
-            self._suggest_compression(context_blocks, features, breakdown, executor_price, current_cost),
-            self._suggest_downgrade(features, current_strategy, current_models, current_cost, current_quality),
-            self._suggest_trimming(features, breakdown, executor_price, current_cost),
-            self._suggest_plan_execute(features, current_strategy, current_models, current_cost, current_quality),
+            self._suggest_cache(current_models, breakdown, scenario, turns, scenario_cost),
+            self._suggest_compression(
+                context_blocks, features, breakdown, executor_price, scenario_cost, turns,
+            ),
+            self._suggest_downgrade(
+                features, current_strategy, current_models, scenario_cost, current_quality, turns,
+            ),
+            self._suggest_trimming(
+                features, breakdown, executor_price, scenario_cost, turns, prompt,
+            ),
+            self._suggest_plan_execute(
+                features, current_strategy, current_models, scenario_cost, current_quality, turns,
+            ),
         ]
         suggestions = [s for s in suggestions if s.estimated_savings > 0]
 
         # 11. 汇总
-        total_savings, optimized_cost, total_pct = self._summarize_savings(suggestions, current_cost)
+        total_savings, optimized_cost, total_pct = self._summarize_savings(
+            suggestions, scenario_cost,
+        )
 
         warnings = [
-            "各优化建议的节省金额为独立估算，实际效果取决于优化组合",
-            "压缩和裁剪存在重叠，同时应用时总节省可能低于各项之和",
-            "降级和分层策略互斥，合计仅取其中最优一项",
+            "各优化建议的节省金额为独立估算，不能直接全部相加",
+            "汇总会比较“当前模型缓存/内容精简”和“降级/分层”路径，取较优者",
+            "压缩和裁剪存在重叠，降级和分层互斥",
             "Token 组成分析为启发式估算，实际分布可能不同",
         ]
         # 审批提示：建议后方案触发 Gate 时，浮到顶层 warning
@@ -185,6 +196,9 @@ class PromptOptimizer:
             current_strategy=current_strategy,
             current_models=current_models,
             current_cost=current_cost,
+            scenario_cost=scenario_cost,
+            scenario=scenario,
+            estimated_turns=turns,
             estimated_output_tokens=features.estimated_output_tokens,
             input_breakdown=breakdown,
             suggestions=suggestions,
@@ -207,6 +221,33 @@ class PromptOptimizer:
         }
 
         in_code_fence = False
+        active_section: str | None = None
+        section_aliases = {
+            "system": "system_prompt",
+            "system prompt": "system_prompt",
+            "系统": "system_prompt",
+            "系统提示": "system_prompt",
+            "系统指令": "system_prompt",
+            "tool definitions": "tool_definitions",
+            "tools": "tool_definitions",
+            "工具": "tool_definitions",
+            "工具定义": "tool_definitions",
+            "context": "fixed_context",
+            "fixed context": "fixed_context",
+            "project context": "fixed_context",
+            "背景": "fixed_context",
+            "固定上下文": "fixed_context",
+            "项目上下文": "fixed_context",
+            "history": "conversation_history",
+            "conversation history": "conversation_history",
+            "历史对话": "conversation_history",
+            "对话历史": "conversation_history",
+            "request": "dynamic_query",
+            "current request": "dynamic_query",
+            "user request": "dynamic_query",
+            "当前请求": "dynamic_query",
+            "用户请求": "dynamic_query",
+        }
 
         for line in prompt.split("\n"):
             stripped = line.strip()
@@ -223,11 +264,30 @@ class PromptOptimizer:
 
             lower = stripped.lower()
 
-            if any(kw in lower for kw in ("you are", "你是", "system:", "系统:", "# system", "作为")):
+            # 支持自然的分节 Prompt。标题后的正文沿用该分类，直到出现下一节。
+            # 例如“对话历史：”下的中文内容不必每行都写 User:/Assistant:。
+            normalized_header = lower.lstrip("#").strip().rstrip(":：").strip()
+            section = section_aliases.get(normalized_header)
+            if section:
+                active_section = section
+                result[section].append(line)
+                continue
+
+            if active_section is not None:
+                result[active_section].append(line)
+                continue
+
+            if any(kw in lower for kw in ("you are", "你是", "system:", "系统:", "系统：", "# system", "作为")):
                 result["system_prompt"].append(line)
             elif any(kw in lower for kw in ("function", "tool", "工具", "parameters", "参数", "schema")):
                 result["tool_definitions"].append(line)
-            elif any(kw in lower for kw in ("user:", "用户:", "assistant:", "助手:", "human:", "ai:", "[user]", "[assistant]")):
+            elif any(
+                kw in lower
+                for kw in (
+                    "user:", "用户:", "用户：", "assistant:", "助手:", "助手：",
+                    "human:", "human：", "ai:", "ai：", "[user]", "[assistant]",
+                )
+            ):
                 result["conversation_history"].append(line)
             elif any(kw in lower for kw in ("import ", "def ", "class ", "<file", "文件", "---")):
                 result["fixed_context"].append(line)
@@ -333,18 +393,31 @@ class PromptOptimizer:
     def _summarize_savings(
         suggestions: list[OptimizationSuggestion], current_cost: float,
     ) -> tuple[float, float, float]:
-        """汇总优化建议：正交可叠加，互斥（降级/分层）取 max。
+        """汇总优化建议，避免把不同模型路径的节省重复相加。
+
+        当前模型路径可组合缓存与内容精简；压缩和裁剪有重叠，只取较大值。
+        降级与 Plan-Execute 会改变模型/策略，其节省与当前模型路径不直接相加。
+        最终在这两条路径之间取较优者，作为保守参考值。
 
         Returns: (total_savings, optimized_cost, total_pct)
         """
-        orthogonal = sum(
-            s.estimated_savings for s in suggestions if s.category in ("缓存", "压缩", "裁剪")
+        cache_savings = sum(
+            s.estimated_savings for s in suggestions if s.category == "缓存"
         )
+        content_savings = max(
+            (
+                s.estimated_savings
+                for s in suggestions
+                if s.category in ("压缩", "裁剪")
+            ),
+            default=0.0,
+        )
+        current_model_path = cache_savings + content_savings
         exclusive = max(
             (s.estimated_savings for s in suggestions if s.category in ("降级", "分层")),
             default=0.0,
         )
-        raw_savings = orthogonal + exclusive
+        raw_savings = max(current_model_path, exclusive)
         total_savings = min(current_cost, raw_savings)
         optimized_cost = max(0.0, current_cost - total_savings)
         total_pct = total_savings / current_cost if current_cost > 0 else 0.0
@@ -428,6 +501,7 @@ class PromptOptimizer:
         breakdown: InputBreakdown,
         executor_price: float,
         current_cost: float,
+        turns: int = 1,
     ) -> OptimizationSuggestion:
         """压缩建议：真正调用 Compressor，展示 3 策略对比。"""
         if not blocks:
@@ -445,18 +519,31 @@ class PromptOptimizer:
         auto_strategy = select_strategy(
             risk_level, breakdown.total, self.compressor.policy.context_length_thresholds,
         )
-        best = results.get(auto_strategy, results[CompressionStrategy.STANDARD])
-
-        savings_tokens = best.original_tokens - best.compressed_tokens
-        savings = savings_tokens / 1000 * executor_price
-        pct = savings / current_cost if current_cost > 0 else 0.0
-
         comparison = {}
         for s, r in results.items():
             comparison[s.value] = {
                 "compressed_tokens": r.compressed_tokens,
                 "reduction_rate": round(r.reduction_rate, 4),
             }
+
+        if auto_strategy == CompressionStrategy.NONE:
+            return OptimizationSuggestion(
+                category="压缩",
+                title="上下文压缩",
+                description=f"当前上下文 {breakdown.total} tokens 未达到主动压缩阈值",
+                estimated_savings=0.0,
+                savings_percentage=0.0,
+                details={
+                    "auto_strategy": auto_strategy.value,
+                    "comparison": comparison,
+                },
+            )
+
+        best = results.get(auto_strategy, results[CompressionStrategy.STANDARD])
+
+        savings_tokens = best.original_tokens - best.compressed_tokens
+        savings = savings_tokens / 1000 * executor_price * turns
+        pct = savings / current_cost if current_cost > 0 else 0.0
 
         return OptimizationSuggestion(
             category="压缩",
@@ -482,6 +569,7 @@ class PromptOptimizer:
         current_models: ModelAssignment,
         current_cost: float,
         current_quality: float = 0.0,
+        turns: int = 1,
     ) -> OptimizationSuggestion:
         """降级建议：使用完整路由硬约束过滤（capabilities + allowed_tiers + context window + sensitivity）。"""
         executor_name = current_models.executor or current_models.planner
@@ -510,9 +598,10 @@ class PromptOptimizer:
 
         # 用修正后 features 重新算成本
         new_models = ModelAssignment(executor=cheapest.name)
-        new_cost = self.estimator.estimate_strategy_cost(
+        new_cost_per_turn = self.estimator.estimate_strategy_cost(
             StrategyType.SINGLE_MODEL, new_models, features, self.registry,
         ).total_cost
+        new_cost = new_cost_per_turn * turns
 
         savings = max(0.0, current_cost - new_cost)
         pct = savings / current_cost if current_cost > 0 else 0.0
@@ -536,6 +625,7 @@ class PromptOptimizer:
                 "suggested_model": cheapest.name,
                 "suggested_tier": cheapest.tier,
                 "new_cost": round(new_cost, 6),
+                "new_cost_per_turn": round(new_cost_per_turn, 6),
                 "requires_approval": requires_approval,
             },
         )
@@ -548,6 +638,8 @@ class PromptOptimizer:
         breakdown: InputBreakdown,
         executor_price: float,
         current_cost: float,
+        turns: int = 1,
+        prompt: str = "",
     ) -> OptimizationSuggestion:
         """裁剪建议：移除冗余固定上下文。"""
         # 只在 HEAVY/EXTREME 上下文时建议裁剪
@@ -561,21 +653,167 @@ class PromptOptimizer:
         # 裁剪 30%-50% 的固定上下文
         trim_ratio = 0.3 if features.context_requirement == ContextLevel.HEAVY else 0.5
         trim_tokens = int(fixed_tokens * trim_ratio)
-        savings = trim_tokens / 1000 * executor_price
+        savings = trim_tokens / 1000 * executor_price * turns
         pct = savings / current_cost if current_cost > 0 else 0.0
+        evidence = self._build_trimming_evidence(prompt, trim_tokens, trim_ratio)
 
         return OptimizationSuggestion(
             category="裁剪",
             title="上下文裁剪",
-            description=f"移除冗余文件/代码内容 (~{trim_tokens} tokens)",
+            description=f"摘要或移除固定上下文候选 (~{trim_tokens} tokens)",
             estimated_savings=savings,
             savings_percentage=pct,
             details={
                 "trimmable_tokens": fixed_tokens,
                 "trim_ratio": trim_ratio,
                 "trimmed_tokens": trim_tokens,
+                "evidence": evidence,
+                "evidence_method": "启发式定位，执行前需确认",
             },
         )
+
+    def _build_trimming_evidence(
+        self,
+        prompt: str,
+        trim_tokens: int,
+        trim_ratio: float,
+    ) -> list[dict[str, object]]:
+        """定位固定上下文中的裁剪候选，不把启发式预算伪装成语义重复检测。"""
+        if not prompt or trim_tokens <= 0:
+            return []
+
+        fixed_section_aliases = {
+            "context",
+            "fixed context",
+            "project context",
+            "背景",
+            "固定上下文",
+            "项目上下文",
+        }
+        all_section_aliases = fixed_section_aliases | {
+            "system",
+            "system prompt",
+            "系统",
+            "系统提示",
+            "系统指令",
+            "tool definitions",
+            "tools",
+            "工具",
+            "工具定义",
+            "history",
+            "conversation history",
+            "历史对话",
+            "对话历史",
+            "request",
+            "current request",
+            "user request",
+            "当前请求",
+            "用户请求",
+        }
+
+        lines = prompt.splitlines()
+        normalized_occurrences: dict[str, list[int]] = {}
+        for line_no, line in enumerate(lines, 1):
+            normalized = " ".join(line.split()).casefold()
+            if normalized:
+                normalized_occurrences.setdefault(normalized, []).append(line_no)
+
+        records: list[tuple[int, str, str]] = []
+        active_section: str | None = None
+        in_code_fence = False
+
+        for line_no, line in enumerate(lines, 1):
+            stripped = line.strip()
+            normalized_header = stripped.casefold().lstrip("#").strip().rstrip(":：").strip()
+
+            if normalized_header in all_section_aliases:
+                active_section = (
+                    "fixed_context"
+                    if normalized_header in fixed_section_aliases
+                    else "other"
+                )
+                continue
+
+            if stripped.startswith("```"):
+                in_code_fence = not in_code_fence
+                records.append((line_no, line, "代码块"))
+                continue
+
+            if in_code_fence:
+                records.append((line_no, line, "代码块"))
+            elif active_section == "fixed_context" and stripped:
+                records.append((line_no, line, "项目上下文"))
+            elif active_section is not None:
+                continue
+            elif stripped and any(
+                marker in stripped.casefold()
+                for marker in ("import ", "def ", "class ", "<file", "文件")
+            ):
+                records.append((line_no, line, "文件或代码上下文"))
+
+        if not records:
+            return []
+
+        groups: list[list[tuple[int, str, str]]] = []
+        for record in records:
+            if (
+                groups
+                and record[0] == groups[-1][-1][0] + 1
+                and record[2] == groups[-1][-1][2]
+            ):
+                groups[-1].append(record)
+            else:
+                groups.append([record])
+
+        candidates: list[dict[str, object]] = []
+        remaining = trim_tokens
+        for group in sorted(groups, key=lambda item: sum(estimate_tokens(r[1]) for r in item), reverse=True):
+            if remaining <= 0:
+                break
+
+            group_text = "\n".join(record[1] for record in group).strip()
+            group_tokens = max(1, estimate_tokens(group_text))
+            estimated_reduction = min(
+                remaining,
+                max(1, int(group_tokens * trim_ratio)),
+            )
+            duplicate_line: int | None = None
+            for line_no, line, _ in group:
+                normalized = " ".join(line.split()).casefold()
+                occurrences = normalized_occurrences.get(normalized, [])
+                other_lines = [candidate for candidate in occurrences if candidate != line_no]
+                if other_lines:
+                    duplicate_line = other_lines[0]
+                    break
+
+            if duplicate_line is not None:
+                reason = f"与第 {duplicate_line} 行内容完全重复，可优先去重"
+                confidence = "确定性重复"
+            else:
+                reason = (
+                    f"{group[0][2]}属于半固定输入；当前按 {trim_ratio:.0%} "
+                    "启发式预算建议优先摘要，未证明语义重复"
+                )
+                confidence = "启发式候选"
+
+            excerpt = " ".join(group_text.split())
+            if len(excerpt) > 180:
+                excerpt = excerpt[:177] + "..."
+
+            candidates.append(
+                {
+                    "line_start": group[0][0],
+                    "line_end": group[-1][0],
+                    "source": group[0][2],
+                    "excerpt": excerpt,
+                    "reason": reason,
+                    "confidence": confidence,
+                    "estimated_reduction_tokens": estimated_reduction,
+                }
+            )
+            remaining -= estimated_reduction
+
+        return candidates
 
     # ── Plan-Execute 建议 ───────────────────────────────────
 
@@ -586,6 +824,7 @@ class PromptOptimizer:
         current_models: ModelAssignment,
         current_cost: float,
         current_quality: float = 0.0,
+        turns: int = 1,
     ) -> OptimizationSuggestion:
         """Plan-Execute 建议：使用完整路由硬约束过滤 + subtasks >= 2。"""
         if current_strategy in (StrategyType.PLAN_EXECUTE, StrategyType.PLAN_EXECUTE_REVIEW):
@@ -610,9 +849,10 @@ class PromptOptimizer:
         executor = min(tier23, key=total_price)
 
         pe_models = ModelAssignment(planner=planner.name, executor=executor.name)
-        pe_cost = self.estimator.estimate_strategy_cost(
+        pe_cost_per_turn = self.estimator.estimate_strategy_cost(
             StrategyType.PLAN_EXECUTE, pe_models, features, self.registry,
         ).total_cost
+        pe_cost = pe_cost_per_turn * turns
 
         savings = max(0.0, current_cost - pe_cost)
         pct = savings / current_cost if current_cost > 0 else 0.0
@@ -639,6 +879,7 @@ class PromptOptimizer:
                 "executor": executor.name,
                 "num_subtasks": len(features.subtasks),
                 "pe_cost": round(pe_cost, 6),
+                "pe_cost_per_turn": round(pe_cost_per_turn, 6),
                 "requires_approval": requires_approval,
             },
         )
